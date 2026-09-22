@@ -1,5 +1,10 @@
 import Order from "../models/orderModel.js";
 
+
+// ========================================
+// CREATE ORDER
+// ========================================
+
 export const createOrder = async (req, res) => {
   try {
     const {
@@ -104,6 +109,12 @@ export const createOrder = async (req, res) => {
         Number(totalCost) || 0,
 
       cart,
+
+      // ========================================
+      // PAYMENT STATUS
+      // ========================================
+
+      paymentStatus: "Pending",
 
       // ========================================
       // PATHAO LOCATION
@@ -248,6 +259,10 @@ export const createOrder = async (req, res) => {
 };
 
 
+// ========================================
+// GET ALL ORDERS
+// ========================================
+
 export const getOrders = async (
   req,
   res
@@ -278,6 +293,283 @@ export const getOrders = async (
   }
 };
 
+
+// ========================================
+// ADMIN - UPDATE ORDER STATUS
+// ========================================
+
+export const updateOrderStatus =
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      const { status } =
+        req.body;
+
+      // ========================================
+      // ALLOWED STATUSES
+      // ========================================
+
+      const allowedStatuses = [
+        "Pending",
+        "Confirmed",
+        "Processing",
+        "Ready To Ship",
+        "Shipped",
+        "Delivered",
+        "Cancelled",
+        "Returned",
+        "Failed",
+      ];
+
+      // ========================================
+      // VALIDATION
+      // ========================================
+
+      if (!id) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Order ID is required.",
+        });
+      }
+
+      if (
+        !status ||
+        !allowedStatuses.includes(
+          status
+        )
+      ) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Invalid order status.",
+        });
+      }
+
+      // ========================================
+      // FIND ORDER
+      // ========================================
+
+      const order =
+        await Order.findById(id);
+
+      if (!order) {
+        return res.status(404).json({
+          success: false,
+          message:
+            "Order not found.",
+        });
+      }
+
+      // ========================================
+      // SAME STATUS
+      // ========================================
+
+      if (
+        order.status === status
+      ) {
+        return res.status(200).json({
+          success: true,
+
+          message:
+            "Order status is already " +
+            status +
+            ".",
+
+          order,
+        });
+      }
+
+      const previousStatus =
+        order.status;
+
+      // ========================================
+      // UPDATE STATUS
+      // ========================================
+
+      order.status = status;
+
+      // ========================================
+      // ADD TRACKING HISTORY
+      // ========================================
+
+      order.trackingHistory.push({
+        status,
+
+        message:
+          `Order status changed from ${previousStatus} to ${status}.`,
+
+        timestamp:
+          new Date(),
+      });
+
+      // ========================================
+      // SAVE
+      // ========================================
+
+      const updatedOrder =
+        await order.save();
+
+      // ========================================
+      // RESPONSE
+      // ========================================
+
+      return res.status(200).json({
+        success: true,
+
+        message:
+          "Order status updated successfully.",
+
+        order:
+          updatedOrder,
+      });
+    } catch (error) {
+      console.error(
+        "Update order status error:",
+        error
+      );
+
+      return res.status(500).json({
+        success: false,
+
+        message:
+          "Failed to update order status.",
+      });
+    }
+  };
+
+
+// ========================================
+// ADMIN - UPDATE PAYMENT STATUS
+// ========================================
+
+export const updatePaymentStatus =
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      const {
+        paymentStatus,
+      } = req.body;
+
+      // ========================================
+      // ALLOWED PAYMENT STATUSES
+      // ========================================
+
+      const allowedPaymentStatuses = [
+        "Pending",
+        "Paid",
+        "Failed",
+        "Refunded",
+      ];
+
+      // ========================================
+      // VALIDATION
+      // ========================================
+
+      if (!id) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Order ID is required.",
+        });
+      }
+
+      if (
+        !paymentStatus ||
+        !allowedPaymentStatuses.includes(
+          paymentStatus
+        )
+      ) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Invalid payment status.",
+        });
+      }
+
+      // ========================================
+      // FIND ORDER
+      // ========================================
+
+      const order =
+        await Order.findById(id);
+
+      if (!order) {
+        return res.status(404).json({
+          success: false,
+          message:
+            "Order not found.",
+        });
+      }
+
+      // ========================================
+      // SAME PAYMENT STATUS
+      // ========================================
+
+      if (
+        order.paymentStatus ===
+        paymentStatus
+      ) {
+        return res.status(200).json({
+          success: true,
+
+          message:
+            "Payment status is already " +
+            paymentStatus +
+            ".",
+
+          order,
+        });
+      }
+
+      // ========================================
+      // UPDATE PAYMENT STATUS
+      // ========================================
+
+      order.paymentStatus =
+        paymentStatus;
+
+      // ========================================
+      // SAVE
+      // ========================================
+
+      const updatedOrder =
+        await order.save();
+
+      // ========================================
+      // RESPONSE
+      // ========================================
+
+      return res.status(200).json({
+        success: true,
+
+        message:
+          "Payment status updated successfully.",
+
+        order:
+          updatedOrder,
+      });
+    } catch (error) {
+      console.error(
+        "Update payment status error:",
+        error
+      );
+
+      return res.status(500).json({
+        success: false,
+
+        message:
+          "Failed to update payment status.",
+      });
+    }
+  };
+
+
+// ========================================
+// ADMIN - UPDATE CUSTOMER ADDRESS
+// ========================================
 
 export const updateOrderAddress =
   async (req, res) => {
@@ -524,6 +816,10 @@ export const updateCustomerInfo =
   };
 
 
+// ========================================
+// CUSTOMER - TRACK ORDER
+// ========================================
+
 export const trackOrder = async (
   req,
   res
@@ -577,7 +873,6 @@ export const trackOrder = async (
           order.courier ||
           null,
 
-        // Old courier fields
         courierName:
           order.courierName ||
           null,
@@ -619,6 +914,10 @@ export const trackOrder = async (
   }
 };
 
+
+// ========================================
+// GET ORDER DETAILS
+// ========================================
 
 export const getOrderDetails =
   async (req, res) => {
@@ -690,6 +989,10 @@ export const getOrderDetails =
 
           status:
             order.status,
+
+          paymentStatus:
+            order.paymentStatus ||
+            "Pending",
 
           createdAt:
             order.createdAt,

@@ -29,9 +29,6 @@ const trackingHistorySchema = new mongoose.Schema(
 
 const orderSchema = new mongoose.Schema(
   {
-    // ========================================
-    // BASIC ORDER INFORMATION
-    // ========================================
 
     orderId: {
       type: String,
@@ -63,10 +60,6 @@ const orderSchema = new mongoose.Schema(
       default: "",
     },
 
-    // ========================================
-    // SHIPPING & PAYMENT
-    // ========================================
-
     shippingMethod: {
       type: String,
       required: true,
@@ -84,9 +77,21 @@ const orderSchema = new mongoose.Schema(
       default: 0,
     },
 
-    // ========================================
-    // ORDER PRODUCTS
-    // ========================================
+    // ---------------------------------
+    // Payment Status
+    // ---------------------------------
+
+    paymentStatus: {
+      type: String,
+      enum: [
+        "Pending",
+        "Paid",
+        "Failed",
+        "Refunded",
+      ],
+      default: "Pending",
+      index: true,
+    },
 
     cart: [
       {
@@ -136,10 +141,6 @@ const orderSchema = new mongoose.Schema(
           default: "",
         },
 
-        // ========================================
-        // CUSTOM MEASUREMENT
-        // ========================================
-
         customization: {
           length: {
             type: String,
@@ -159,10 +160,6 @@ const orderSchema = new mongoose.Schema(
       },
     ],
 
-    // ========================================
-    // INTERNAL ORDER STATUS
-    // ========================================
-
     status: {
       type: String,
       enum: [
@@ -179,14 +176,14 @@ const orderSchema = new mongoose.Schema(
       default: "Pending",
     },
 
-    // ========================================
-    // COURIER INFORMATION
-    // ========================================
-
     courier: {
       provider: {
         type: String,
-        enum: ["Pathao", "SteadFast", null],
+        enum: [
+          "Pathao",
+          "SteadFast",
+          null,
+        ],
         default: null,
       },
 
@@ -211,10 +208,6 @@ const orderSchema = new mongoose.Schema(
       },
     },
 
-    // ========================================
-    // OLD COURIER FIELDS
-    // ========================================
-
     courierName: {
       type: String,
       default: null,
@@ -234,10 +227,6 @@ const orderSchema = new mongoose.Schema(
       type: String,
       default: "Pending",
     },
-
-    // ========================================
-    // FRAUD CHECK
-    // ========================================
 
     fraudCheck: {
       checked: {
@@ -282,18 +271,10 @@ const orderSchema = new mongoose.Schema(
       },
     },
 
-    // ========================================
-    // TRACKING HISTORY
-    // ========================================
-
     trackingHistory: {
       type: [trackingHistorySchema],
       default: [],
     },
-
-    // ========================================
-    // PATHAO LOCATION
-    // ========================================
 
     recipient_city: {
       type: Number,
@@ -310,6 +291,7 @@ const orderSchema = new mongoose.Schema(
       default: null,
     },
   },
+
   {
     timestamps: true,
   }

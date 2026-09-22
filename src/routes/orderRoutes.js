@@ -3,6 +3,8 @@ import express from "express";
 import {
   createOrder,
   getOrders,
+  updateOrderStatus,
+  updatePaymentStatus,
   updateOrderAddress,
   updateCustomerInfo,
   trackOrder,
@@ -13,67 +15,50 @@ import {
 const router =
   express.Router();
 
-// ========================================
-// CUSTOMER ORDER CREATE
-// ========================================
-
 router.post(
   "/",
   createOrder
 );
-
-// ========================================
-// ADMIN - GET ALL ORDERS
-// ========================================
 
 router.get(
   "/",
   getOrders
 );
 
-// ========================================
-// ADMIN - DELETE ORDER
-// ========================================
-
-router.delete(
-  "/:id",
-  deleteOrder
+router.get(
+  "/track/:orderId",
+  trackOrder
 );
 
-// ========================================
-// ADMIN - UPDATE CUSTOMER PHONE + ADDRESS
-// ========================================
+router.get(
+  "/details/:orderId",
+  getOrderDetails
+);
+
+router.put(
+  "/:id/status",
+  updateOrderStatus
+);
+
+router.put(
+  "/:id/payment-status",
+  updatePaymentStatus
+);
 
 router.put(
   "/:id/customer-info",
   updateCustomerInfo
 );
 
-// ========================================
-// ADMIN - UPDATE CUSTOMER ADDRESS
-// ========================================
-
 router.put(
   "/:id/address",
   updateOrderAddress
 );
 
-// ========================================
-// CUSTOMER - TRACK ORDER
-// ========================================
-
-router.get(
-  "/track/:orderId",
-  trackOrder
+router.delete(
+  "/:id",
+  deleteOrder
 );
 
-// ========================================
-// CUSTOMER - ORDER DETAILS
-// ========================================
-
-router.get(
-  "/details/:orderId",
-  getOrderDetails
-);
 
 export default router;
