@@ -2,9 +2,6 @@ import Settings from "../models/settingsModel.js";
 
 import { v2 as cloudinary } from "cloudinary";
 
-
-// Cloudinary Public ID বের করার function
-
 const getCloudinaryPublicId =
     (imageUrl) => {
 

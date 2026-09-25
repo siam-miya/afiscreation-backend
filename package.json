@@ -30,6 +30,7 @@
     "multer": "^2.3.0",
     "multer-storage-cloudinary": "^4.0.0",
     "nodemailer": "^9.0.6",
+    "resend": "^6.28.1",
     "slugify": "^1.6.9"
   },
   "devDependencies": {

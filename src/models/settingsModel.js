@@ -2,11 +2,7 @@ import mongoose from "mongoose";
 
 
 const settingsSchema = new mongoose.Schema(
-
     {
-
-        // Floating Contact
-
         enableFloatingHub: {
             type: Boolean,
             default: true,

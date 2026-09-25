@@ -26,6 +26,7 @@ app.use(cors({
   credentials: true,
 }));
 
+
 app.use(cookieParser());
 app.use(express.json());
 app.use(morgan("dev"));
@@ -45,12 +46,7 @@ app.use("/api/fraud", fraudRoutes);
 app.use("/api/v1/shipping-zones", shippingZoneRoutes);
 app.use("/api/banners", bannerRoutes);
 app.use("/api/settings", settingsRoutes);
-// app.use(
-//     "/api/settings",
-//     settingsRoutes
-// );
 
-// Global Error Handler
 app.use((err, req, res, next) => {
   const statusCode = err.statusCode || 500;
   res.status(statusCode).json({ success: false, message: err.message });
