@@ -1,376 +1,1085 @@
-import User from "../models/userModel.js";
-import jwt from "jsonwebtoken";
-import sendEmail from "../utils/sendEmail.js";
 import crypto from "crypto";
+import { OAuth2Client } from "google-auth-library";
 
-const sendTokenResponse = (user, statusCode, res, message) => {
-  const token = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET, {
-    expiresIn: process.env.JWT_EXPIRE || "7d",
-  });
+import User from "../models/userModel.js";
 
-  const options = {
-    expires: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: process.env.NODE_ENV === "production" ? "strict" : "lax",
-  };
+import sendEmail from "../utils/sendEmail.js";
 
-  res.status(statusCode).cookie("token", token, options).json({
-    success: true,
-    message,
-    token,
-    user: { 
-      id: user._id, 
-      name: user.name, 
-      email: user.email, 
-      role: user.role,
-      picture: user.picture || "",
-      address: user.address || ""
-    },
-  });
+import {
+  createAccessToken,
+  createRefreshToken,
+  hashToken,
+  getRefreshTokenExpiry,
+  verifyAccessToken,
+  ACCESS_TOKEN_MAX_AGE,
+  REFRESH_TOKEN_MAX_AGE,
+} from "../utils/tokenUtils.js";
+
+const googleClient = new OAuth2Client(
+  process.env.GOOGLE_CLIENT_ID
+);
+
+const isProduction =
+  process.env.NODE_ENV === "production";
+
+/* =========================
+   COOKIE OPTIONS
+========================= */
+
+const ACCESS_COOKIE_OPTIONS = {
+  httpOnly: true,
+  secure: isProduction,
+  sameSite: isProduction ? "strict" : "lax",
+  path: "/",
+  maxAge: ACCESS_TOKEN_MAX_AGE,
 };
 
-// 1. Register with OTP
-export const registerUser = async (req, res, next) => {
+const REFRESH_COOKIE_OPTIONS = {
+  httpOnly: true,
+  secure: isProduction,
+  sameSite: isProduction ? "strict" : "lax",
+  path: "/",
+  maxAge: REFRESH_TOKEN_MAX_AGE,
+};
+
+const CLEAR_COOKIE_OPTIONS = {
+  httpOnly: true,
+  secure: isProduction,
+  sameSite: isProduction ? "strict" : "lax",
+  path: "/",
+};
+
+/* =========================
+   HELPERS
+========================= */
+
+const normalizeEmail = (email = "") => {
+  return email.trim().toLowerCase();
+};
+
+const generateOTP = () => {
+  return crypto.randomInt(100000, 1000000).toString();
+};
+
+const hashOTP = (otp) => {
+  return crypto
+    .createHash("sha256")
+    .update(otp)
+    .digest("hex");
+};
+
+const safeUser = (user) => {
+  return {
+    _id: user._id,
+    name: user.name,
+    email: user.email,
+    role: user.role,
+    picture: user.picture || "",
+    address: user.address || "",
+    isVerified: user.isVerified,
+  };
+};
+
+const clearAuthCookies = (res) => {
+  res.clearCookie(
+    "accessToken",
+    CLEAR_COOKIE_OPTIONS
+  );
+
+  res.clearCookie(
+    "refreshToken",
+    CLEAR_COOKIE_OPTIONS
+  );
+};
+
+/* =========================
+   CREATE SESSION
+========================= */
+
+const createSession = async (user, res) => {
+  const accessToken = createAccessToken(user);
+
+  const refreshToken = createRefreshToken();
+
+  user.refreshTokenHash = hashToken(refreshToken);
+  user.refreshTokenExpire = getRefreshTokenExpiry();
+
+  await user.save({
+    validateBeforeSave: false,
+  });
+
+  res.cookie(
+    "accessToken",
+    accessToken,
+    ACCESS_COOKIE_OPTIONS
+  );
+
+  res.cookie(
+    "refreshToken",
+    refreshToken,
+    REFRESH_COOKIE_OPTIONS
+  );
+
+  return safeUser(user);
+};
+
+/* =========================
+   REGISTER
+========================= */
+
+export const registerUser = async (
+  req,
+  res,
+  next
+) => {
   try {
-    const { name, email, password } = req.body;
+    const name = req.body?.name?.trim();
+    const email = normalizeEmail(req.body?.email);
+    const password = req.body?.password;
 
-    let user = await User.findOne({ email });
-
-    if (user && user.isVerified) {
-      return res.status(400).json({ success: false, message: "User already exists with this email!" });
+    if (!name || !email || !password) {
+      return res.status(400).json({
+        success: false,
+        message: "Name, email and password are required.",
+      });
     }
 
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    const otpExpire = Date.now() + 10 * 60 * 1000;
+    if (name.length < 2 || name.length > 100) {
+      return res.status(400).json({
+        success: false,
+        message: "Name must be between 2 and 100 characters.",
+      });
+    }
 
-    if (user && !user.isVerified) {
+    if (password.length < 8) {
+      return res.status(400).json({
+        success: false,
+        message: "Password must be at least 8 characters.",
+      });
+    }
+
+    let user = await User.findOne({ email }).select(
+      "+otpHash +otpExpire +otpAttempts"
+    );
+
+    const otp = generateOTP();
+
+    const otpHash = hashOTP(otp);
+
+    const otpExpire = new Date(
+      Date.now() + 10 * 60 * 1000
+    );
+
+    if (user) {
+      if (user.isVerified) {
+        return res.status(400).json({
+          success: false,
+          message: "An account with this email already exists.",
+        });
+      }
+
       user.name = name;
-      user.password = password; 
-      user.otp = otp;
+      user.password = password;
+      user.otpHash = otpHash;
       user.otpExpire = otpExpire;
+      user.otpAttempts = 0;
+
       await user.save();
     } else {
       user = await User.create({
         name,
         email,
         password,
-        otp,
+        otpHash,
         otpExpire,
-        isVerified: false,
+        otpAttempts: 0,
       });
     }
 
-    const message = `
-      <div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
-        <h2>Welcome to Afis Creation!</h2>
-        <p>Your Email Verification Code is:</p>
-        <h1 style="color: #6B21A8; letter-spacing: 3px;">${otp}</h1>
-        <p>This code is valid for 10 minutes.</p>
-      </div>
-    `;
+    try {
+      await sendEmail({
+        to: email,
+        subject: "Afis Creation - Verify Your Email",
+        html: `
+          <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto">
+            <h2>Verify Your Afis Creation Account</h2>
 
-    await sendEmail({
-      email: user.email,
-      subject: "Account Verification OTP - Afis Creation",
-      html: message,
-    });
+            <p>Hello ${name},</p>
 
-    res.status(200).json({
+            <p>Your verification code is:</p>
+
+            <h1 style="letter-spacing:8px">${otp}</h1>
+
+            <p>This code will expire in 10 minutes.</p>
+
+            <p>If you did not create this account, you can ignore this email.</p>
+          </div>
+        `,
+      });
+    } catch (emailError) {
+      user.otpHash = undefined;
+      user.otpExpire = undefined;
+      user.otpAttempts = 0;
+
+      await user.save({
+        validateBeforeSave: false,
+      });
+
+      return res.status(500).json({
+        success: false,
+        message: "Unable to send verification email. Please try again.",
+      });
+    }
+
+    return res.status(201).json({
       success: true,
-      message: "OTP sent to your email. Please verify to complete registration.",
-      email: user.email,
+      message:
+        "Registration successful. Please check your email for the OTP.",
+      email,
     });
   } catch (error) {
     next(error);
   }
 };
 
-// 2. Verify OTP Controller
-export const verifyOTP = async (req, res, next) => {
-  try {
-    const { email, otp } = req.body;
+/* =========================
+   VERIFY OTP
+========================= */
 
-    const user = await User.findOne({ email });
+export const verifyOTP = async (
+  req,
+  res,
+  next
+) => {
+  try {
+    const email = normalizeEmail(req.body?.email);
+    const otp = String(req.body?.otp || "").trim();
+
+    if (!email || !/^\d{6}$/.test(otp)) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid email and 6-digit OTP are required.",
+      });
+    }
+
+    const user = await User.findOne({ email }).select(
+      "+otpHash +otpExpire +otpAttempts +refreshTokenHash +refreshTokenExpire"
+    );
 
     if (!user) {
-      return res.status(404).json({ success: false, message: "User not found!" });
+      return res.status(400).json({
+        success: false,
+        message: "Invalid verification request.",
+      });
     }
 
     if (user.isVerified) {
-      return res.status(400).json({ success: false, message: "User is already verified!" });
-    }
-
-    if (user.otp !== otp || user.otpExpire < Date.now()) {
-      return res.status(400).json({ success: false, message: "Invalid or expired OTP!" });
-    }
-
-    user.isVerified = true;
-    user.otp = undefined;
-    user.otpExpire = undefined;
-    await user.save();
-
-    sendTokenResponse(user, 200, res, "Account verified and registered successfully!");
-  } catch (error) {
-    next(error);
-  }
-};
-
-// 3. Login Controller
-export const loginUser = async (req, res, next) => {
-  try {
-    const { email, password } = req.body;
-    if (!email || !password) {
-      return res.status(400).json({ success: false, message: "Please provide email and password!" });
-    }
-
-    const user = await User.findOne({ email }).select("+password");
-    if (!user) {
-      return res.status(401).json({ success: false, message: "Invalid email or password!" });
-    }
-
-    if (!user.password) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "This account uses Google Sign-In. Please login with Google!" 
+      return res.status(400).json({
+        success: false,
+        message: "Account is already verified.",
       });
     }
 
-    const isMatch = await user.matchPassword(password);
+    if (!user.otpHash || !user.otpExpire) {
+      return res.status(400).json({
+        success: false,
+        message: "OTP is invalid or has expired.",
+      });
+    }
+
+    if (user.otpExpire.getTime() < Date.now()) {
+      user.otpHash = undefined;
+      user.otpExpire = undefined;
+      user.otpAttempts = 0;
+
+      await user.save({
+        validateBeforeSave: false,
+      });
+
+      return res.status(400).json({
+        success: false,
+        message: "OTP has expired. Please request a new one.",
+      });
+    }
+
+    if ((user.otpAttempts || 0) >= 5) {
+      return res.status(429).json({
+        success: false,
+        message: "Too many invalid OTP attempts.",
+      });
+    }
+
+    user.otpAttempts =
+      (user.otpAttempts || 0) + 1;
+
+    if (hashOTP(otp) !== user.otpHash) {
+      await user.save({
+        validateBeforeSave: false,
+      });
+
+      return res.status(400).json({
+        success: false,
+        message: "Invalid OTP.",
+      });
+    }
+
+    user.isVerified = true;
+    user.otpHash = undefined;
+    user.otpExpire = undefined;
+    user.otpAttempts = 0;
+
+    await user.save({
+      validateBeforeSave: false,
+    });
+
+    const userData = await createSession(
+      user,
+      res
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Email verified successfully.",
+      user: userData,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/* =========================
+   LOGIN
+========================= */
+
+export const loginUser = async (
+  req,
+  res,
+  next
+) => {
+  try {
+    const email = normalizeEmail(req.body?.email);
+    const password = req.body?.password;
+
+    if (!email || !password) {
+      return res.status(400).json({
+        success: false,
+        message: "Email and password are required.",
+      });
+    }
+
+    const user = await User.findOne({ email }).select(
+      "+password +refreshTokenHash +refreshTokenExpire"
+    );
+
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid email or password.",
+      });
+    }
+
+    if (!user.password && user.googleId) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "This account uses Google login. Please continue with Google.",
+      });
+    }
+
+    if (!user.password) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid email or password.",
+      });
+    }
+
+    const isMatch =
+      await user.matchPassword(password);
+
     if (!isMatch) {
-      return res.status(401).json({ success: false, message: "Invalid email or password!" });
+      return res.status(401).json({
+        success: false,
+        message: "Invalid email or password.",
+      });
     }
 
     if (!user.isVerified) {
-      return res.status(403).json({ success: false, message: "Please verify your email first!" });
+      return res.status(403).json({
+        success: false,
+        message:
+          "Please verify your email before logging in.",
+      });
     }
 
-    sendTokenResponse(user, 200, res, "Logged in successfully!");
+    const userData = await createSession(
+      user,
+      res
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Login successful.",
+      user: userData,
+    });
   } catch (error) {
     next(error);
   }
 };
 
-// 4. Logout Controller
-export const logoutUser = (req, res, next) => {
+/* =========================
+   REFRESH TOKEN
+========================= */
+
+export const refreshToken = async (
+  req,
+  res,
+  next
+) => {
   try {
-    res.cookie("token", "none", { expires: new Date(Date.now() + 10 * 1000), httpOnly: true });
-    res.status(200).json({ success: true, message: "Logged out successfully!" });
+    const refreshToken =
+      req.cookies?.refreshToken;
+
+    if (!refreshToken) {
+      clearAuthCookies(res);
+
+      return res.status(401).json({
+        success: false,
+        message: "Refresh token missing.",
+      });
+    }
+
+    const refreshTokenHash =
+      hashToken(refreshToken);
+
+    const user = await User.findOne({
+      refreshTokenHash,
+      refreshTokenExpire: {
+        $gt: new Date(),
+      },
+    }).select(
+      "+refreshTokenHash +refreshTokenExpire"
+    );
+
+    if (!user) {
+      clearAuthCookies(res);
+
+      return res.status(401).json({
+        success: false,
+        message: "Invalid or expired refresh token.",
+      });
+    }
+
+    if (!user.isVerified) {
+      user.refreshTokenHash = undefined;
+      user.refreshTokenExpire = undefined;
+
+      await user.save({
+        validateBeforeSave: false,
+      });
+
+      clearAuthCookies(res);
+
+      return res.status(401).json({
+        success: false,
+        message: "Account verification required.",
+      });
+    }
+
+    const userData = await createSession(
+      user,
+      res
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Session refreshed.",
+      user: userData,
+    });
   } catch (error) {
     next(error);
   }
 };
 
-// 5. Google Auth Controller
-export const googleAuth = async (req, res, next) => {
-  try {
-    const { name, email, picture, googleId } = req.body;
+/* =========================
+   LOGOUT
+========================= */
 
-    if (!email || !googleId) {
-      return res.status(400).json({ success: false, message: "Invalid Google authentication data!" });
+export const logoutUser = async (
+  req,
+  res,
+  next
+) => {
+  try {
+    const refreshToken =
+      req.cookies?.refreshToken;
+
+    if (refreshToken) {
+      const refreshTokenHash =
+        hashToken(refreshToken);
+
+      await User.updateOne(
+        {
+          refreshTokenHash,
+        },
+        {
+          $unset: {
+            refreshTokenHash: 1,
+            refreshTokenExpire: 1,
+          },
+        }
+      );
     }
 
-    let user = await User.findOne({ email });
+    clearAuthCookies(res);
+
+    return res.status(200).json({
+      success: true,
+      message: "Logged out successfully.",
+    });
+  } catch (error) {
+    clearAuthCookies(res);
+    next(error);
+  }
+};
+
+/* =========================
+   GOOGLE AUTH
+========================= */
+
+export const googleAuth = async (
+  req,
+  res,
+  next
+) => {
+  try {
+    const { accessToken } = req.body || {};
+
+    if (!accessToken) {
+      return res.status(400).json({
+        success: false,
+        message: "Google access token is required.",
+      });
+    }
+
+    if (!process.env.GOOGLE_CLIENT_ID) {
+      return res.status(500).json({
+        success: false,
+        message: "Google authentication is not configured.",
+      });
+    }
+
+    let tokenInfo;
+
+    try {
+      tokenInfo =
+        await googleClient.getTokenInfo(
+          accessToken
+        );
+    } catch {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid Google authentication.",
+      });
+    }
+
+    if (
+      tokenInfo.aud !==
+      process.env.GOOGLE_CLIENT_ID
+    ) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid Google client.",
+      });
+    }
+
+    const googleResponse = await fetch(
+      "https://www.googleapis.com/oauth2/v3/userinfo",
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      }
+    );
+
+    if (!googleResponse.ok) {
+      return res.status(401).json({
+        success: false,
+        message: "Unable to verify Google account.",
+      });
+    }
+
+    const googleUser =
+      await googleResponse.json();
+
+    if (
+      !googleUser.sub ||
+      !googleUser.email ||
+      googleUser.email_verified !== true
+    ) {
+      return res.status(401).json({
+        success: false,
+        message: "Google email could not be verified.",
+      });
+    }
+
+    const email = normalizeEmail(
+      googleUser.email
+    );
+
+    let user = await User.findOne({
+      email,
+    }).select(
+      "+refreshTokenHash +refreshTokenExpire"
+    );
 
     if (user) {
-      if (!user.googleId || !user.picture) {
-        user.googleId = googleId;
-        user.picture = picture || user.picture;
-        user.isVerified = true;
-        await user.save();
+      if (
+        user.googleId &&
+        user.googleId !== googleUser.sub
+      ) {
+        return res.status(409).json({
+          success: false,
+          message:
+            "This email is linked to another Google account.",
+        });
       }
+
+      user.googleId = googleUser.sub;
+      user.picture =
+        googleUser.picture || user.picture || "";
+      user.isVerified = true;
+
+      await user.save({
+        validateBeforeSave: false,
+      });
     } else {
       user = await User.create({
-        name,
+        name:
+          googleUser.name ||
+          googleUser.email.split("@")[0],
         email,
-        picture,
-        googleId,
+        googleId: googleUser.sub,
+        picture: googleUser.picture || "",
         isVerified: true,
       });
     }
 
-    sendTokenResponse(user, 200, res, "Google login successful!");
+    const userData = await createSession(
+      user,
+      res
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Google login successful.",
+      user: userData,
+    });
   } catch (error) {
     next(error);
   }
 };
 
-// 6. Forgot Password
-export const forgotPassword = async (req, res, next) => {
+/* =========================
+   FORGOT PASSWORD
+========================= */
+
+export const forgotPassword = async (
+  req,
+  res,
+  next
+) => {
   try {
-    const { email } = req.body;
-    const user = await User.findOne({ email });
+    const email = normalizeEmail(
+      req.body?.email
+    );
 
-    if (!user) {
-      return res.status(404).json({ success: false, message: "No user found with this email!" });
+    const genericResponse = {
+      success: true,
+      message:
+        "If an account exists with this email, a password reset code has been sent.",
+    };
+
+    if (!email) {
+      return res.status(200).json(
+        genericResponse
+      );
     }
-
-    if (user.googleId && !user.password) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "This account uses Google Sign-In. Please login with Google!" 
-      });
-    }
-
-    const resetCode = Math.floor(100000 + Math.random() * 900000).toString();
-
-    user.resetPasswordToken = crypto.createHash("sha256").update(resetCode).digest("hex");
-    user.resetPasswordExpire = Date.now() + 10 * 60 * 1000;
-
-    await user.save({ validateBeforeSave: false });
-
-    const message = `
-      <div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
-        <h2>Password Reset Request</h2>
-        <p>Your Password Reset Code is:</p>
-        <h1 style="color: #6B21A8; letter-spacing: 3px;">${resetCode}</h1>
-        <p>This code is valid for 10 minutes. If you didn't request this, please ignore.</p>
-      </div>
-    `;
-
-    try {
-      await sendEmail({
-        email: user.email,
-        subject: "Password Reset OTP - Afis Creation",
-        html: message,
-      });
-
-      res.status(200).json({ success: true, message: "Reset code sent to your email!" });
-    } catch (error) {
-      user.resetPasswordToken = undefined;
-      user.resetPasswordExpire = undefined;
-      await user.save({ validateBeforeSave: false });
-      return res.status(500).json({ success: false, message: "Email could not be sent" });
-    }
-  } catch (error) {
-    next(error);
-  }
-};
-
-// 7. Reset Password
-export const resetPassword = async (req, res, next) => {
-  try {
-    const { email, resetCode, newPassword } = req.body;
-
-    const hashedToken = crypto.createHash("sha256").update(resetCode).digest("hex");
 
     const user = await User.findOne({
       email,
-      resetPasswordToken: hashedToken,
-      resetPasswordExpire: { $gt: Date.now() },
+    }).select(
+      "+resetPasswordToken +resetPasswordExpire +resetPasswordAttempts"
+    );
+
+    if (!user || (!user.password && user.googleId)) {
+      return res.status(200).json(
+        genericResponse
+      );
+    }
+
+    const resetCode = generateOTP();
+
+    user.resetPasswordToken =
+      hashToken(resetCode);
+
+    user.resetPasswordExpire = new Date(
+      Date.now() + 10 * 60 * 1000
+    );
+
+    user.resetPasswordAttempts = 0;
+
+    await user.save({
+      validateBeforeSave: false,
     });
 
-    if (!user) {
-      return res.status(400).json({ success: false, message: "Invalid or expired reset code!" });
-    }
+    try {
+      await sendEmail({
+        to: email,
+        subject: "Afis Creation - Password Reset",
+        html: `
+          <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto">
+            <h2>Password Reset</h2>
 
-    user.password = newPassword;
-    user.resetPasswordToken = undefined;
-    user.resetPasswordExpire = undefined;
+            <p>Your Afis Creation password reset code is:</p>
 
-    await user.save();
+            <h1 style="letter-spacing:8px">${resetCode}</h1>
 
-    res.status(200).json({ success: true, message: "Password reset successful! Please login with new password." });
-  } catch (error) {
-    next(error);
-  }
-};
+            <p>This code will expire in 10 minutes.</p>
 
-// 8. Change Password
-export const changePassword = async (req, res, next) => {
-  try {
-    const { email, currentPassword, newPassword } = req.body;
+            <p>If you did not request this, please ignore this email.</p>
+          </div>
+        `,
+      });
+    } catch {
+      user.resetPasswordToken = undefined;
+      user.resetPasswordExpire = undefined;
+      user.resetPasswordAttempts = 0;
 
-    if (!currentPassword || !newPassword) {
-      return res.status(400).json({ success: false, message: "Please provide current and new passwords!" });
-    }
-
-    let user;
-    if (req.user && req.user._id) {
-      user = await User.findById(req.user._id).select("+password");
-    } else if (email) {
-      user = await User.findOne({ email }).select("+password");
-    }
-
-    if (!user) {
-      return res.status(404).json({ success: false, message: "User not found!" });
-    }
-
-    if (!user.password) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "This account uses Google Sign-In. You cannot change password directly." 
+      await user.save({
+        validateBeforeSave: false,
       });
     }
 
-    const isMatch = await user.matchPassword(currentPassword);
-    if (!isMatch) {
-      return res.status(401).json({ success: false, message: "Current password is incorrect!" });
-    }
-
-    user.password = newPassword;
-    await user.save();
-
-    res.status(200).json({ success: true, message: "Password updated successfully!" });
+    return res.status(200).json(
+      genericResponse
+    );
   } catch (error) {
     next(error);
   }
 };
 
-// 11. Update Profile
-export const updateProfile = async (req, res, next) => {
-  try {
-    const { name, address } = req.body;
-    const userId = req.user._id;
+/* =========================
+   RESET PASSWORD
+========================= */
 
-    const user = await User.findById(userId);
-    if (!user) {
-      return res.status(404).json({ success: false, message: "User not found!" });
+export const resetPassword = async (
+  req,
+  res,
+  next
+) => {
+  try {
+    const email = normalizeEmail(
+      req.body?.email
+    );
+
+    const resetCode = String(
+      req.body?.resetCode ||
+        req.body?.otp ||
+        ""
+    ).trim();
+
+    const newPassword =
+      req.body?.newPassword;
+
+    if (
+      !email ||
+      !/^\d{6}$/.test(resetCode) ||
+      !newPassword
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Email, 6-digit reset code and new password are required.",
+      });
     }
 
-    if (name) {
+    if (newPassword.length < 8) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "New password must be at least 8 characters.",
+      });
+    }
+
+    const user = await User.findOne({
+      email,
+    }).select(
+      "+password +resetPasswordToken +resetPasswordExpire +resetPasswordAttempts +refreshTokenHash +refreshTokenExpire"
+    );
+
+    if (!user) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid or expired reset code.",
+      });
+    }
+
+    if (
+      !user.resetPasswordToken ||
+      !user.resetPasswordExpire
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid or expired reset code.",
+      });
+    }
+
+    if (
+      user.resetPasswordExpire.getTime() <
+      Date.now()
+    ) {
+      user.resetPasswordToken = undefined;
+      user.resetPasswordExpire = undefined;
+      user.resetPasswordAttempts = 0;
+
+      await user.save({
+        validateBeforeSave: false,
+      });
+
+      return res.status(400).json({
+        success: false,
+        message: "Reset code has expired.",
+      });
+    }
+
+    if (
+      (user.resetPasswordAttempts || 0) >= 5
+    ) {
+      return res.status(429).json({
+        success: false,
+        message:
+          "Too many invalid reset attempts.",
+      });
+    }
+
+    user.resetPasswordAttempts =
+      (user.resetPasswordAttempts || 0) + 1;
+
+    if (
+      hashToken(resetCode) !==
+      user.resetPasswordToken
+    ) {
+      await user.save({
+        validateBeforeSave: false,
+      });
+
+      return res.status(400).json({
+        success: false,
+        message: "Invalid reset code.",
+      });
+    }
+
+    user.password = newPassword;
+
+    user.resetPasswordToken = undefined;
+    user.resetPasswordExpire = undefined;
+    user.resetPasswordAttempts = 0;
+
+    user.refreshTokenHash = undefined;
+    user.refreshTokenExpire = undefined;
+
+    user.tokenVersion =
+      (user.tokenVersion || 0) + 1;
+
+    await user.save();
+
+    clearAuthCookies(res);
+
+    return res.status(200).json({
+      success: true,
+      message:
+        "Password reset successful. Please login again.",
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/* =========================
+   CHANGE PASSWORD
+========================= */
+
+export const changePassword = async (
+  req,
+  res,
+  next
+) => {
+  try {
+    const currentPassword =
+      req.body?.currentPassword;
+
+    const newPassword =
+      req.body?.newPassword;
+
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Current password and new password are required.",
+      });
+    }
+
+    if (newPassword.length < 8) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "New password must be at least 8 characters.",
+      });
+    }
+
+    const user = await User.findById(
+      req.user._id
+    ).select(
+      "+password +refreshTokenHash +refreshTokenExpire"
+    );
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found.",
+      });
+    }
+
+    if (!user.password) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Google accounts cannot change password here.",
+      });
+    }
+
+    const isMatch =
+      await user.matchPassword(
+        currentPassword
+      );
+
+    if (!isMatch) {
+      return res.status(401).json({
+        success: false,
+        message: "Current password is incorrect.",
+      });
+    }
+
+    user.password = newPassword;
+
+    user.refreshTokenHash = undefined;
+    user.refreshTokenExpire = undefined;
+
+    user.tokenVersion =
+      (user.tokenVersion || 0) + 1;
+
+    await user.save();
+
+    clearAuthCookies(res);
+
+    return res.status(200).json({
+      success: true,
+      message:
+        "Password changed successfully. Please login again.",
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/* =========================
+   UPDATE PROFILE
+========================= */
+
+export const updateProfile = async (
+  req,
+  res,
+  next
+) => {
+  try {
+    const user = await User.findById(
+      req.user._id
+    );
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found.",
+      });
+    }
+
+    if (req.body?.name !== undefined) {
+      const name = req.body.name.trim();
+
+      if (
+        name.length < 2 ||
+        name.length > 100
+      ) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Name must be between 2 and 100 characters.",
+        });
+      }
+
       user.name = name;
     }
 
-    if (address !== undefined) {
+    if (req.body?.address !== undefined) {
+      const address = req.body.address.trim();
+
+      if (address.length > 500) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Address cannot exceed 500 characters.",
+        });
+      }
+
       user.address = address;
     }
 
-    if (req.file && req.file.path) {
+    if (req.file?.path) {
       user.picture = req.file.path;
     }
 
     await user.save();
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
-      message: "Profile updated successfully!",
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        picture: user.picture || "",
-        address: user.address || "",
-      },
+      message: "Profile updated successfully.",
+      user: safeUser(user),
     });
   } catch (error) {
     next(error);
   }
 };
 
-// 9. Get All Users (Admin & Moderator Access)
-export const getAllUsers = async (req, res, next) => {
+/* =========================
+   GET ALL USERS
+========================= */
+
+export const getAllUsers = async (
+  req,
+  res,
+  next
+) => {
   try {
-    let query = {};
+    const filter =
+      req.user.role === "moderator"
+        ? { role: { $ne: "admin" } }
+        : {};
 
-    if (req.user && req.user.role === "moderator") {
-      query = { role: { $ne: "admin" } };
-    }
+    const users = await User.find(filter)
+      .select("-password")
+      .sort({ createdAt: -1 });
 
-    const users = await User.find(query).select("-password").sort({ createdAt: -1 });
-
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       count: users.length,
       users,
@@ -380,70 +1089,115 @@ export const getAllUsers = async (req, res, next) => {
   }
 };
 
-// 10. Update User Role (Admin & Moderator Access with restrictions)
-export const updateUserRole = async (req, res, next) => {
-  try {
-    const { role } = req.body;
-    const { id } = req.params;
+/* =========================
+   UPDATE USER ROLE
+========================= */
 
-    if (!["customer", "moderator", "admin"].includes(role)) {
-      return res.status(400).json({ success: false, message: "Invalid role specified!" });
+export const updateUserRole = async (
+  req,
+  res,
+  next
+) => {
+  try {
+    const { id } = req.params;
+    const { role } = req.body;
+
+    if (
+      !["customer", "moderator", "admin"].includes(
+        role
+      )
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid role.",
+      });
     }
 
     const user = await User.findById(id);
 
     if (!user) {
-      return res.status(404).json({ success: false, message: "User not found!" });
+      return res.status(404).json({
+        success: false,
+        message: "User not found.",
+      });
     }
 
-    if (req.user.role === "moderator") {
-      if (role === "admin") {
-        return res.status(403).json({ success: false, message: "Moderators cannot assign the admin role!" });
-      }
-      if (user.role === "admin") {
-        return res.status(403).json({ success: false, message: "Moderators cannot modify admin users!" });
-      }
+    if (
+      req.user._id.toString() ===
+      user._id.toString()
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "You cannot change your own role.",
+      });
     }
-    const updatedUser = await User.findByIdAndUpdate(
-      id,
-      { role },
-      { new: true, runValidators: false }
-    ).select("-password");
 
-    res.status(200).json({
+    if (
+      req.user.role === "moderator" &&
+      (user.role === "admin" || role === "admin")
+    ) {
+      return res.status(403).json({
+        success: false,
+        message:
+          "Moderators cannot manage admin roles.",
+      });
+    }
+
+    user.role = role;
+
+    user.tokenVersion =
+      (user.tokenVersion || 0) + 1;
+
+    user.refreshTokenHash = undefined;
+    user.refreshTokenExpire = undefined;
+
+    await user.save();
+
+    return res.status(200).json({
       success: true,
-      message: `User role updated to ${role} successfully!`,
-      user: {
-        id: updatedUser._id,
-        name: updatedUser.name,
-        email: updatedUser.email,
-        role: updatedUser.role,
-      },
+      message: "User role updated successfully.",
     });
   } catch (error) {
     next(error);
   }
 };
 
-// 12. Delete User (Only Admin Access)
-export const deleteUser = async (req, res, next) => {
+/* =========================
+   DELETE USER
+========================= */
+
+export const deleteUser = async (
+  req,
+  res,
+  next
+) => {
   try {
     const { id } = req.params;
 
-    const user = await User.findById(id);
-    if (!user) {
-      return res.status(404).json({ success: false, message: "User not found!" });
+    if (
+      req.user._id.toString() === id
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "You cannot delete your own account.",
+      });
     }
 
-    if (req.user && req.user._id.toString() === id) {
-      return res.status(400).json({ success: false, message: "You cannot delete your own account!" });
+    const user = await User.findById(id);
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found.",
+      });
     }
 
     await user.deleteOne();
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
-      message: "User deleted successfully!",
+      message: "User deleted successfully.",
     });
   } catch (error) {
     next(error);

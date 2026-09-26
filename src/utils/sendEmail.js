@@ -1,37 +1,74 @@
 import { Resend } from "resend";
 
-const resend = new Resend(process.env.RESEND_API_KEY);
-
 const sendEmail = async (options) => {
+  // Environment validation
+  const apiKey = process.env.RESEND_API_KEY;
+  const emailFrom = process.env.EMAIL_FROM;
+
+  if (!apiKey) {
+    throw new Error(
+      "RESEND_API_KEY is not configured."
+    );
+  }
+
+  if (!emailFrom) {
+    throw new Error(
+      "EMAIL_FROM is not configured."
+    );
+  }
+
+  // Payload validation
+  if (
+    !options?.to ||
+    !options?.subject ||
+    !options?.html
+  ) {
+    throw new Error(
+      "Invalid email payload."
+    );
+  }
+
   try {
-    const { data, error } = await resend.emails.send({
-      from: process.env.EMAIL_FROM,
-      to: [options.email],
-      subject: options.subject,
-      html: options.html,
-    });
+    const resend = new Resend(apiKey);
 
+    const { data, error } =
+      await resend.emails.send({
+        from: emailFrom,
+        to: [options.to],
+        subject: options.subject,
+        html: options.html,
+      });
+
+    // Resend API error
     if (error) {
-      console.error("=================================");
-      console.error("EMAIL SENDING FAILED");
-      console.error("Error:", error);
-      console.error("=================================");
+      console.error(
+        "RESEND ERROR:",
+        JSON.stringify(error, null, 2)
+      );
 
-      throw new Error(error.message || "Failed to send email");
+      throw new Error(
+        error.message ||
+          "Resend email sending failed."
+      );
     }
 
-    console.log("=================================");
-    console.log("EMAIL SENT SUCCESSFULLY");
-    console.log("To:", options.email);
-    console.log("Message ID:", data?.id);
-    console.log("=================================");
+    // Safety check
+    if (!data?.id) {
+      throw new Error(
+        "Resend did not return an email ID."
+      );
+    }
+
+    console.log(
+      `Email sent successfully: ${data.id}`
+    );
 
     return data;
   } catch (error) {
-    console.error("=================================");
-    console.error("EMAIL SENDING FAILED");
-    console.error("Error:", error.message);
-    console.error("=================================");
+    console.error(
+      "EMAIL ERROR:",
+      error?.message || error
+    );
 
     throw error;
   }

@@ -1,102 +1,60 @@
-import { v2 as cloudinary } from 'cloudinary';
+import multer from "multer";
+import { CloudinaryStorage } from "multer-storage-cloudinary";
+import cloudinary from "../config/cloudinary.js";
 
-import { CloudinaryStorage } from 'multer-storage-cloudinary';
+const storage = new CloudinaryStorage({
+  cloudinary,
 
-import multer from 'multer';
+  params: {
+    folder: "afiscreation/profile-images",
 
-import dotenv from 'dotenv';
+    allowed_formats: [
+      "jpg",
+      "jpeg",
+      "png",
+      "webp",
+    ],
 
-dotenv.config();
-
-
-// Cloudinary Configuration
-
-cloudinary.config({
-
-  cloud_name:
-    process.env.CLOUDINARY_CLOUD_NAME,
-
-  api_key:
-    process.env.CLOUDINARY_API_KEY,
-
-  api_secret:
-    process.env.CLOUDINARY_API_SECRET,
-
+    transformation: [
+      {
+        width: 500,
+        height: 500,
+        crop: "limit",
+        quality: "auto",
+        fetch_format: "auto",
+      },
+    ],
+  },
 });
 
+const fileFilter = (req, file, cb) => {
+  const allowedTypes = [
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+  ];
 
-// Cloudinary Storage Setup
+  if (!allowedTypes.includes(file.mimetype)) {
+    return cb(
+      new Error(
+        "Only JPG, JPEG, PNG and WEBP images are allowed."
+      ),
+      false
+    );
+  }
 
-const storage =
-  new CloudinaryStorage({
+  cb(null, true);
+};
 
-    cloudinary: cloudinary,
+const upload = multer({
+  storage,
 
-    params: {
+  limits: {
+    fileSize: 2 * 1024 * 1024,
+    files: 1,
+  },
 
-      folder:
-        'afiscreation/banners',
-
-      allowed_formats: [
-        'jpg',
-        'jpeg',
-        'png',
-        'webp',
-      ],
-
-      transformation: [
-        {
-          quality: 'auto',
-          fetch_format: 'auto',
-        },
-      ],
-
-    },
-
-  });
-
-
-// Multer Upload Setup
-
-const upload =
-  multer({
-
-    storage: storage,
-
-    limits: {
-
-      fileSize:
-        5 * 1024 * 1024,
-
-    },
-
-    fileFilter:
-      (req, file, cb) => {
-
-        if (
-          file.mimetype.startsWith(
-            'image/'
-          )
-        ) {
-
-          cb(
-            null,
-            true
-          );
-
-        } else {
-
-          cb(
-            new Error(
-              'Only image files are allowed'
-            )
-          );
-
-        }
-
-      },
-
-  });
-
+  fileFilter,
+});
 
 export default upload;
