@@ -24,7 +24,9 @@ import {
 import upload from "../middleware/uploadMiddleware.js";
 
 import {
-  authLimiter,
+  registerLimiter,
+  loginLimiter,
+  googleLimiter,
   otpLimiter,
   passwordLimiter,
   refreshLimiter,
@@ -32,57 +34,71 @@ import {
 
 const router = express.Router();
 
-/* Authentication */
+/* =========================
+   AUTH
+========================= */
 
+// Register
 router.post(
   "/register",
-  authLimiter,
+  registerLimiter,
   registerUser
 );
 
+// Verify OTP
 router.post(
   "/verify-otp",
   otpLimiter,
   verifyOTP
 );
 
+// Login
 router.post(
   "/login",
-  authLimiter,
+  loginLimiter,
   loginUser
 );
 
+// Google Login
 router.post(
   "/google",
-  authLimiter,
+  googleLimiter,
   googleAuth
 );
 
+// Refresh access token
 router.post(
   "/refresh",
   refreshLimiter,
   refreshToken
 );
 
+// Logout
 router.post(
   "/logout",
   logoutUser
 );
 
-/* Password */
 
+/* =========================
+   PASSWORD
+========================= */
+
+// Forgot password
 router.post(
   "/forgot-password",
   passwordLimiter,
   forgotPassword
 );
 
+// Reset password
 router.post(
   "/reset-password",
   passwordLimiter,
   resetPassword
 );
 
+// Change password
 router.put(
   "/change-password",
   protect,
@@ -90,8 +106,12 @@ router.put(
   changePassword
 );
 
-/* Profile */
 
+/* =========================
+   USER PROFILE
+========================= */
+
+// Update profile
 router.put(
   "/update-profile",
   protect,
@@ -99,8 +119,12 @@ router.put(
   updateProfile
 );
 
-/* Admin / Moderator */
 
+/* =========================
+   ADMIN / MODERATOR
+========================= */
+
+// Get all users
 router.get(
   "/users",
   protect,
@@ -108,6 +132,7 @@ router.get(
   getAllUsers
 );
 
+// Update user role
 router.put(
   "/users/:id/role",
   protect,
@@ -115,6 +140,7 @@ router.put(
   updateUserRole
 );
 
+// Delete user
 router.delete(
   "/users/:id",
   protect,
@@ -123,3 +149,4 @@ router.delete(
 );
 
 export default router;
+
