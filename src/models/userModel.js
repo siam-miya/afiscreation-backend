@@ -44,7 +44,11 @@ const userSchema = new mongoose.Schema(
 
     role: {
       type: String,
-      enum: ["customer", "moderator", "admin"],
+      enum: [
+        "customer",
+        "moderator",
+        "admin",
+      ],
       default: "customer",
       index: true,
     },
@@ -107,32 +111,37 @@ const userSchema = new mongoose.Schema(
   }
 );
 
-// Password hashing
 userSchema.pre("save", async function () {
-  if (!this.isModified("password") || !this.password) {
+  if (
+    !this.isModified("password") ||
+    !this.password
+  ) {
     return;
   }
 
-  const salt = await bcrypt.genSalt(12);
+  const salt =
+    await bcrypt.genSalt(12);
 
-  this.password = await bcrypt.hash(
-    this.password,
-    salt
-  );
+  this.password =
+    await bcrypt.hash(
+      this.password,
+      salt
+    );
 });
 
-// Password comparison
-userSchema.methods.matchPassword = async function (
-  enteredPassword
-) {
-  if (!this.password) {
-    return false;
-  }
+userSchema.methods.matchPassword =
+  async function (enteredPassword) {
+    if (!this.password) {
+      return false;
+    }
 
-  return bcrypt.compare(
-    enteredPassword,
-    this.password
-  );
-};
+    return bcrypt.compare(
+      enteredPassword,
+      this.password
+    );
+  };
 
-export default mongoose.model("User", userSchema);
+export default mongoose.model(
+  "User",
+  userSchema
+);

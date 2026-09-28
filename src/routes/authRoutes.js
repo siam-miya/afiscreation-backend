@@ -38,67 +38,57 @@ const router = express.Router();
    AUTH
 ========================= */
 
-// Register
 router.post(
   "/register",
   registerLimiter,
   registerUser
 );
 
-// Verify OTP
 router.post(
   "/verify-otp",
   otpLimiter,
   verifyOTP
 );
 
-// Login
 router.post(
   "/login",
   loginLimiter,
   loginUser
 );
 
-// Google Login
 router.post(
   "/google",
   googleLimiter,
   googleAuth
 );
 
-// Refresh access token
 router.post(
   "/refresh",
   refreshLimiter,
   refreshToken
 );
 
-// Logout
 router.post(
   "/logout",
   logoutUser
 );
 
-
 /* =========================
    PASSWORD
 ========================= */
 
-// Forgot password
 router.post(
   "/forgot-password",
   passwordLimiter,
   forgotPassword
 );
 
-// Reset password
 router.post(
   "/reset-password",
   passwordLimiter,
   resetPassword
 );
 
-// Change password
 router.put(
   "/change-password",
   protect,
@@ -106,12 +96,10 @@ router.put(
   changePassword
 );
 
-
 /* =========================
    USER PROFILE
 ========================= */
 
-// Update profile
 router.put(
   "/update-profile",
   protect,
@@ -119,28 +107,30 @@ router.put(
   updateProfile
 );
 
-
 /* =========================
    ADMIN / MODERATOR
 ========================= */
 
-// Get all users
 router.get(
   "/users",
   protect,
-  authorize("admin", "moderator"),
+  authorize(
+    "admin",
+    "moderator"
+  ),
   getAllUsers
 );
 
-// Update user role
 router.put(
   "/users/:id/role",
   protect,
-  authorize("admin", "moderator"),
+  authorize(
+    "admin",
+    "moderator"
+  ),
   updateUserRole
 );
 
-// Delete user
 router.delete(
   "/users/:id",
   protect,
@@ -149,4 +139,3 @@ router.delete(
 );
 
 export default router;
-

@@ -2,7 +2,6 @@ import crypto from "crypto";
 import { OAuth2Client } from "google-auth-library";
 
 import User from "../models/userModel.js";
-
 import sendEmail from "../utils/sendEmail.js";
 
 import {
@@ -10,7 +9,6 @@ import {
   createRefreshToken,
   hashToken,
   getRefreshTokenExpiry,
-  verifyAccessToken,
   ACCESS_TOKEN_MAX_AGE,
   REFRESH_TOKEN_MAX_AGE,
 } from "../utils/tokenUtils.js";
@@ -26,27 +24,25 @@ const isProduction =
    COOKIE OPTIONS
 ========================= */
 
-const ACCESS_COOKIE_OPTIONS = {
+const BASE_COOKIE_OPTIONS = {
   httpOnly: true,
   secure: isProduction,
-  sameSite: isProduction ? "strict" : "lax",
+  sameSite: isProduction ? "none" : "lax",
   path: "/",
+};
+
+const ACCESS_COOKIE_OPTIONS = {
+  ...BASE_COOKIE_OPTIONS,
   maxAge: ACCESS_TOKEN_MAX_AGE,
 };
 
 const REFRESH_COOKIE_OPTIONS = {
-  httpOnly: true,
-  secure: isProduction,
-  sameSite: isProduction ? "strict" : "lax",
-  path: "/",
+  ...BASE_COOKIE_OPTIONS,
   maxAge: REFRESH_TOKEN_MAX_AGE,
 };
 
 const CLEAR_COOKIE_OPTIONS = {
-  httpOnly: true,
-  secure: isProduction,
-  sameSite: isProduction ? "strict" : "lax",
-  path: "/",
+  ...BASE_COOKIE_OPTIONS,
 };
 
 /* =========================
@@ -54,7 +50,7 @@ const CLEAR_COOKIE_OPTIONS = {
 ========================= */
 
 const normalizeEmail = (email = "") => {
-  return email.trim().toLowerCase();
+  return String(email).trim().toLowerCase();
 };
 
 const generateOTP = () => {
@@ -140,21 +136,24 @@ export const registerUser = async (
     if (!name || !email || !password) {
       return res.status(400).json({
         success: false,
-        message: "Name, email and password are required.",
+        message:
+          "Name, email and password are required.",
       });
     }
 
     if (name.length < 2 || name.length > 100) {
       return res.status(400).json({
         success: false,
-        message: "Name must be between 2 and 100 characters.",
+        message:
+          "Name must be between 2 and 100 characters.",
       });
     }
 
     if (password.length < 8) {
       return res.status(400).json({
         success: false,
-        message: "Password must be at least 8 characters.",
+        message:
+          "Password must be at least 8 characters.",
       });
     }
 
@@ -163,7 +162,6 @@ export const registerUser = async (
     );
 
     const otp = generateOTP();
-
     const otpHash = hashOTP(otp);
 
     const otpExpire = new Date(
@@ -174,7 +172,8 @@ export const registerUser = async (
       if (user.isVerified) {
         return res.status(400).json({
           success: false,
-          message: "An account with this email already exists.",
+          message:
+            "An account with this email already exists.",
         });
       }
 
@@ -199,7 +198,8 @@ export const registerUser = async (
     try {
       await sendEmail({
         to: email,
-        subject: "Afis Creation - Verify Your Email",
+        subject:
+          "Afis Creation - Verify Your Email",
         html: `
           <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto">
             <h2>Verify Your Afis Creation Account</h2>
@@ -212,11 +212,19 @@ export const registerUser = async (
 
             <p>This code will expire in 10 minutes.</p>
 
-            <p>If you did not create this account, you can ignore this email.</p>
+            <p>
+              If you did not create this account,
+              you can ignore this email.
+            </p>
           </div>
         `,
       });
     } catch (emailError) {
+      console.error(
+        "Registration email error:",
+        emailError
+      );
+
       user.otpHash = undefined;
       user.otpExpire = undefined;
       user.otpAttempts = 0;
@@ -227,7 +235,8 @@ export const registerUser = async (
 
       return res.status(500).json({
         success: false,
-        message: "Unable to send verification email. Please try again.",
+        message:
+          "Unable to send verification email. Please try again.",
       });
     }
 
@@ -253,12 +262,15 @@ export const verifyOTP = async (
 ) => {
   try {
     const email = normalizeEmail(req.body?.email);
-    const otp = String(req.body?.otp || "").trim();
+    const otp = String(
+      req.body?.otp || ""
+    ).trim();
 
     if (!email || !/^\d{6}$/.test(otp)) {
       return res.status(400).json({
         success: false,
-        message: "Valid email and 6-digit OTP are required.",
+        message:
+          "Valid email and 6-digit OTP are required.",
       });
     }
 
@@ -269,21 +281,24 @@ export const verifyOTP = async (
     if (!user) {
       return res.status(400).json({
         success: false,
-        message: "Invalid verification request.",
+        message:
+          "Invalid verification request.",
       });
     }
 
     if (user.isVerified) {
       return res.status(400).json({
         success: false,
-        message: "Account is already verified.",
+        message:
+          "Account is already verified.",
       });
     }
 
     if (!user.otpHash || !user.otpExpire) {
       return res.status(400).json({
         success: false,
-        message: "OTP is invalid or has expired.",
+        message:
+          "OTP is invalid or has expired.",
       });
     }
 
@@ -298,14 +313,16 @@ export const verifyOTP = async (
 
       return res.status(400).json({
         success: false,
-        message: "OTP has expired. Please request a new one.",
+        message:
+          "OTP has expired. Please request a new one.",
       });
     }
 
     if ((user.otpAttempts || 0) >= 5) {
       return res.status(429).json({
         success: false,
-        message: "Too many invalid OTP attempts.",
+        message:
+          "Too many invalid OTP attempts.",
       });
     }
 
@@ -339,7 +356,8 @@ export const verifyOTP = async (
 
     return res.status(200).json({
       success: true,
-      message: "Email verified successfully.",
+      message:
+        "Email verified successfully.",
       user: userData,
     });
   } catch (error) {
@@ -363,7 +381,8 @@ export const loginUser = async (
     if (!email || !password) {
       return res.status(400).json({
         success: false,
-        message: "Email and password are required.",
+        message:
+          "Email and password are required.",
       });
     }
 
@@ -374,7 +393,8 @@ export const loginUser = async (
     if (!user) {
       return res.status(401).json({
         success: false,
-        message: "Invalid email or password.",
+        message:
+          "Invalid email or password.",
       });
     }
 
@@ -389,7 +409,8 @@ export const loginUser = async (
     if (!user.password) {
       return res.status(401).json({
         success: false,
-        message: "Invalid email or password.",
+        message:
+          "Invalid email or password.",
       });
     }
 
@@ -399,7 +420,8 @@ export const loginUser = async (
     if (!isMatch) {
       return res.status(401).json({
         success: false,
-        message: "Invalid email or password.",
+        message:
+          "Invalid email or password.",
       });
     }
 
@@ -444,7 +466,8 @@ export const refreshToken = async (
 
       return res.status(401).json({
         success: false,
-        message: "Refresh token missing.",
+        message:
+          "Refresh token missing.",
       });
     }
 
@@ -465,7 +488,8 @@ export const refreshToken = async (
 
       return res.status(401).json({
         success: false,
-        message: "Invalid or expired refresh token.",
+        message:
+          "Invalid or expired refresh token.",
       });
     }
 
@@ -481,7 +505,8 @@ export const refreshToken = async (
 
       return res.status(401).json({
         success: false,
-        message: "Account verification required.",
+        message:
+          "Account verification required.",
       });
     }
 
@@ -534,7 +559,8 @@ export const logoutUser = async (
 
     return res.status(200).json({
       success: true,
-      message: "Logged out successfully.",
+      message:
+        "Logged out successfully.",
     });
   } catch (error) {
     clearAuthCookies(res);
@@ -557,14 +583,16 @@ export const googleAuth = async (
     if (!accessToken) {
       return res.status(400).json({
         success: false,
-        message: "Google access token is required.",
+        message:
+          "Google access token is required.",
       });
     }
 
     if (!process.env.GOOGLE_CLIENT_ID) {
       return res.status(500).json({
         success: false,
-        message: "Google authentication is not configured.",
+        message:
+          "Google authentication is not configured.",
       });
     }
 
@@ -578,7 +606,8 @@ export const googleAuth = async (
     } catch {
       return res.status(401).json({
         success: false,
-        message: "Invalid Google authentication.",
+        message:
+          "Invalid Google authentication.",
       });
     }
 
@@ -588,23 +617,26 @@ export const googleAuth = async (
     ) {
       return res.status(401).json({
         success: false,
-        message: "Invalid Google client.",
+        message:
+          "Invalid Google client.",
       });
     }
 
-    const googleResponse = await fetch(
-      "https://www.googleapis.com/oauth2/v3/userinfo",
-      {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-        },
-      }
-    );
+    const googleResponse =
+      await fetch(
+        "https://www.googleapis.com/oauth2/v3/userinfo",
+        {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
+        }
+      );
 
     if (!googleResponse.ok) {
       return res.status(401).json({
         success: false,
-        message: "Unable to verify Google account.",
+        message:
+          "Unable to verify Google account.",
       });
     }
 
@@ -618,7 +650,8 @@ export const googleAuth = async (
     ) {
       return res.status(401).json({
         success: false,
-        message: "Google email could not be verified.",
+        message:
+          "Google email could not be verified.",
       });
     }
 
@@ -646,7 +679,9 @@ export const googleAuth = async (
 
       user.googleId = googleUser.sub;
       user.picture =
-        googleUser.picture || user.picture || "";
+        googleUser.picture ||
+        user.picture ||
+        "";
       user.isVerified = true;
 
       await user.save({
@@ -659,7 +694,8 @@ export const googleAuth = async (
           googleUser.email.split("@")[0],
         email,
         googleId: googleUser.sub,
-        picture: googleUser.picture || "",
+        picture:
+          googleUser.picture || "",
         isVerified: true,
       });
     }
@@ -671,7 +707,8 @@ export const googleAuth = async (
 
     return res.status(200).json({
       success: true,
-      message: "Google login successful.",
+      message:
+        "Google login successful.",
       user: userData,
     });
   } catch (error) {
@@ -700,9 +737,9 @@ export const forgotPassword = async (
     };
 
     if (!email) {
-      return res.status(200).json(
-        genericResponse
-      );
+      return res
+        .status(200)
+        .json(genericResponse);
     }
 
     const user = await User.findOne({
@@ -711,10 +748,13 @@ export const forgotPassword = async (
       "+resetPasswordToken +resetPasswordExpire +resetPasswordAttempts"
     );
 
-    if (!user || (!user.password && user.googleId)) {
-      return res.status(200).json(
-        genericResponse
-      );
+    if (
+      !user ||
+      (!user.password && user.googleId)
+    ) {
+      return res
+        .status(200)
+        .json(genericResponse);
     }
 
     const resetCode = generateOTP();
@@ -722,9 +762,10 @@ export const forgotPassword = async (
     user.resetPasswordToken =
       hashToken(resetCode);
 
-    user.resetPasswordExpire = new Date(
-      Date.now() + 10 * 60 * 1000
-    );
+    user.resetPasswordExpire =
+      new Date(
+        Date.now() + 10 * 60 * 1000
+      );
 
     user.resetPasswordAttempts = 0;
 
@@ -735,7 +776,8 @@ export const forgotPassword = async (
     try {
       await sendEmail({
         to: email,
-        subject: "Afis Creation - Password Reset",
+        subject:
+          "Afis Creation - Password Reset",
         html: `
           <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto">
             <h2>Password Reset</h2>
@@ -751,8 +793,10 @@ export const forgotPassword = async (
         `,
       });
     } catch {
-      user.resetPasswordToken = undefined;
-      user.resetPasswordExpire = undefined;
+      user.resetPasswordToken =
+        undefined;
+      user.resetPasswordExpire =
+        undefined;
       user.resetPasswordAttempts = 0;
 
       await user.save({
@@ -760,9 +804,9 @@ export const forgotPassword = async (
       });
     }
 
-    return res.status(200).json(
-      genericResponse
-    );
+    return res
+      .status(200)
+      .json(genericResponse);
   } catch (error) {
     next(error);
   }
@@ -820,7 +864,8 @@ export const resetPassword = async (
     if (!user) {
       return res.status(400).json({
         success: false,
-        message: "Invalid or expired reset code.",
+        message:
+          "Invalid or expired reset code.",
       });
     }
 
@@ -830,7 +875,8 @@ export const resetPassword = async (
     ) {
       return res.status(400).json({
         success: false,
-        message: "Invalid or expired reset code.",
+        message:
+          "Invalid or expired reset code.",
       });
     }
 
@@ -838,8 +884,10 @@ export const resetPassword = async (
       user.resetPasswordExpire.getTime() <
       Date.now()
     ) {
-      user.resetPasswordToken = undefined;
-      user.resetPasswordExpire = undefined;
+      user.resetPasswordToken =
+        undefined;
+      user.resetPasswordExpire =
+        undefined;
       user.resetPasswordAttempts = 0;
 
       await user.save({
@@ -848,12 +896,14 @@ export const resetPassword = async (
 
       return res.status(400).json({
         success: false,
-        message: "Reset code has expired.",
+        message:
+          "Reset code has expired.",
       });
     }
 
     if (
-      (user.resetPasswordAttempts || 0) >= 5
+      (user.resetPasswordAttempts || 0) >=
+      5
     ) {
       return res.status(429).json({
         success: false,
@@ -875,14 +925,17 @@ export const resetPassword = async (
 
       return res.status(400).json({
         success: false,
-        message: "Invalid reset code.",
+        message:
+          "Invalid reset code.",
       });
     }
 
     user.password = newPassword;
 
-    user.resetPasswordToken = undefined;
-    user.resetPasswordExpire = undefined;
+    user.resetPasswordToken =
+      undefined;
+    user.resetPasswordExpire =
+      undefined;
     user.resetPasswordAttempts = 0;
 
     user.refreshTokenHash = undefined;
@@ -966,7 +1019,8 @@ export const changePassword = async (
     if (!isMatch) {
       return res.status(401).json({
         success: false,
-        message: "Current password is incorrect.",
+        message:
+          "Current password is incorrect.",
       });
     }
 
@@ -1031,7 +1085,8 @@ export const updateProfile = async (
     }
 
     if (req.body?.address !== undefined) {
-      const address = req.body.address.trim();
+      const address =
+        req.body.address.trim();
 
       if (address.length > 500) {
         return res.status(400).json({
@@ -1052,7 +1107,8 @@ export const updateProfile = async (
 
     return res.status(200).json({
       success: true,
-      message: "Profile updated successfully.",
+      message:
+        "Profile updated successfully.",
       user: safeUser(user),
     });
   } catch (error) {
@@ -1070,14 +1126,25 @@ export const getAllUsers = async (
   next
 ) => {
   try {
+    const currentRole =
+      String(req.user.role || "")
+        .trim()
+        .toLowerCase();
+
     const filter =
-      req.user.role === "moderator"
-        ? { role: { $ne: "admin" } }
+      currentRole === "moderator"
+        ? {
+            role: {
+              $ne: "admin",
+            },
+          }
         : {};
 
     const users = await User.find(filter)
       .select("-password")
-      .sort({ createdAt: -1 });
+      .sort({
+        createdAt: -1,
+      });
 
     return res.status(200).json({
       success: true,
@@ -1100,12 +1167,19 @@ export const updateUserRole = async (
 ) => {
   try {
     const { id } = req.params;
-    const { role } = req.body;
+
+    const role = String(
+      req.body?.role || ""
+    )
+      .trim()
+      .toLowerCase();
 
     if (
-      !["customer", "moderator", "admin"].includes(
-        role
-      )
+      ![
+        "customer",
+        "moderator",
+        "admin",
+      ].includes(role)
     ) {
       return res.status(400).json({
         success: false,
@@ -1133,9 +1207,20 @@ export const updateUserRole = async (
       });
     }
 
+    const currentRole =
+      String(req.user.role || "")
+        .trim()
+        .toLowerCase();
+
+    const targetCurrentRole =
+      String(user.role || "")
+        .trim()
+        .toLowerCase();
+
     if (
-      req.user.role === "moderator" &&
-      (user.role === "admin" || role === "admin")
+      currentRole === "moderator" &&
+      (targetCurrentRole === "admin" ||
+        role === "admin")
     ) {
       return res.status(403).json({
         success: false,
@@ -1156,7 +1241,8 @@ export const updateUserRole = async (
 
     return res.status(200).json({
       success: true,
-      message: "User role updated successfully.",
+      message:
+        "User role updated successfully.",
     });
   } catch (error) {
     next(error);
@@ -1176,11 +1262,13 @@ export const deleteUser = async (
     const { id } = req.params;
 
     if (
-      req.user._id.toString() === id
+      req.user._id.toString() ===
+      id
     ) {
       return res.status(400).json({
         success: false,
-        message: "You cannot delete your own account.",
+        message:
+          "You cannot delete your own account.",
       });
     }
 
@@ -1197,7 +1285,8 @@ export const deleteUser = async (
 
     return res.status(200).json({
       success: true,
-      message: "User deleted successfully.",
+      message:
+        "User deleted successfully.",
     });
   } catch (error) {
     next(error);
