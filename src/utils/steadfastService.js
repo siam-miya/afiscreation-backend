@@ -556,7 +556,7 @@ export const checkSteadfastFraud = async (
         );
 
         const fraudUrl =
-          `${config.baseUrl}/fraud_check/${encodeURIComponent(
+          `${config.baseUrl}/fraud_check/score/${encodeURIComponent(
             phone
           )}`;
 
@@ -653,211 +653,128 @@ export const checkSteadfastFraud = async (
         }
 
         /* =================================================
-           RESPONSE ROOT
+           RESPONSE (score endpoint)
         ================================================= */
 
         const root =
           response?.data || {};
 
+        console.log(
+          "STEADFAST FRAUD RAW RESPONSE:",
+          JSON.stringify(response.data)
+        );
+
         let data = root;
 
         if (
           root?.data &&
-          typeof root.data ===
-            "object" &&
-          !Array.isArray(
-            root.data
-          )
+          typeof root.data === "object" &&
+          !Array.isArray(root.data)
         ) {
           data = root.data;
         }
 
-        /* =================================================
-           TOTAL PARCELS
-        ================================================= */
-
-        const totalParcels =
+        const deliveryRatio =
           toSafeNumber(
-            data?.Total_parcels ??
-              data?.total_parcels ??
-              data?.totalParcels ??
-              data?.total_orders ??
-              data?.Total_orders ??
-              data?.totalOrders ??
-              data?.parcel_count ??
-              data?.parcelCount ??
-              0
+            data?.delivery_ratio ??
+              data?.deliveryRatio
           );
 
-        /* =================================================
-           TOTAL DELIVERED
-        ================================================= */
-
-        const totalDelivered =
+        const cancellationRatio =
           toSafeNumber(
-            data?.total_delivered ??
-              data?.Total_delivered ??
-              data?.totalDelivered ??
-              data?.delivered ??
-              data?.Delivered ??
-              data?.delivered_orders ??
-              data?.deliveredOrders ??
-              0
+            data?.cancellation_ratio ??
+              data?.cancellationRatio
           );
 
-        /* =================================================
-           TOTAL CANCELLED
-        ================================================= */
-
-        const totalCancelled =
+        const returnRatio =
           toSafeNumber(
-            data?.total_cancelled ??
-              data?.Total_cancelled ??
-              data?.totalCancelled ??
-              data?.cancelled ??
-              data?.Cancelled ??
-              data?.canceled ??
-              data?.cancelled_orders ??
-              data?.cancelledOrders ??
-              0
+            data?.return_ratio ??
+              data?.returnRatio
           );
 
-        /* =================================================
-           TOTAL RETURNED
-        ================================================= */
+        const volumeBand = String(
+          data?.volume_band ??
+            data?.volumeBand ??
+            ""
+        ).toLowerCase();
 
-        const totalReturned =
+        const totalReports =
           toSafeNumber(
-            data?.total_returned ??
-              data?.Total_returned ??
-              data?.totalReturned ??
-              data?.returned ??
-              data?.returns ??
-              data?.returned_orders ??
-              data?.returnedOrders ??
-              0
+            data?.total_reports ??
+              data?.totalReports
           );
 
-        /* =================================================
-           FRAUD REPORTS
-        ================================================= */
-
-        let totalFraudReports =
-          [];
-
-        const fraudReportValue =
-          data?.total_fraud_reports ??
-          data?.Total_fraud_reports ??
-          data?.totalFraudReports ??
-          data?.fraud_reports ??
-          data?.fraudReports ??
-          data?.fraud_report_count ??
-          data?.fraudReportCount ??
-          0;
-
-        if (
+        const fraudCategories =
           Array.isArray(
-            fraudReportValue
+            data?.fraud_categories
           )
-        ) {
-          totalFraudReports =
-            fraudReportValue;
-        } else {
-          const fraudCount =
-            toSafeNumber(
-              fraudReportValue
-            );
+            ? data.fraud_categories
+            : [];
 
-          if (
-            fraudCount > 0
-          ) {
-            totalFraudReports =
-              Array(
-                Math.floor(
-                  fraudCount
-                )
-              ).fill({});
-          }
-        }
+        const doubtfulReports =
+          Boolean(
+            data?.doubtful_reports
+          );
 
-        /* =================================================
-           HAS HISTORY
-        ================================================= */
+        const reportCount = Math.max(
+          totalReports,
+          fraudCategories.length
+        );
+
+        const totalFraudReports =
+          reportCount > 0
+            ? Array(
+                Math.floor(reportCount)
+              ).fill({})
+            : [];
 
         const hasHistory =
-          totalParcels > 0 ||
-          totalDelivered > 0 ||
-          totalCancelled > 0 ||
-          totalReturned > 0 ||
-          totalFraudReports.length >
-            0;
-
-        /* =================================================
-           CANCELLATION RATE
-        ================================================= */
-
-        const cancellationRate =
-          totalParcels > 0
-            ? Number(
-                (
-                  (totalCancelled /
-                    totalParcels) *
-                  100
-                ).toFixed(2)
-              )
-            : 0;
-
-        /* =================================================
-           FINAL RESULT
-        ================================================= */
+          deliveryRatio > 0 ||
+          cancellationRatio > 0 ||
+          returnRatio > 0 ||
+          reportCount > 0 ||
+          doubtfulReports;
 
         const parsedResult = {
           phone,
 
-          totalParcels,
-
-          totalDelivered,
-
-          totalCancelled,
-
-          totalReturned,
+          /* score endpoint does not return counts */
+          totalParcels: 0,
+          totalDelivered: 0,
+          totalCancelled: 0,
+          totalReturned: 0,
 
           totalFraudReports,
 
-          cancellationRate,
+          cancellationRate:
+            cancellationRatio,
+
+          deliveryRatio,
+          returnRatio,
+          volumeBand,
+          doubtfulReports,
 
           hasHistory,
 
-          raw:
-            response.data,
+          raw: response.data,
         };
 
-        /* =================================================
-           SAVE CACHE
-        ================================================= */
-
-        fraudCache.set(
-          phone,
-          {
-            data:
-              parsedResult,
-
-            expiresAt:
-              Date.now() +
-              FRAUD_CACHE_TTL,
-          }
-        );
+        fraudCache.set(phone, {
+          data: parsedResult,
+          expiresAt:
+            Date.now() +
+            FRAUD_CACHE_TTL,
+        });
 
         console.log(
           "STEADFAST FRAUD RESULT",
           {
-            totalParcels,
-            totalDelivered,
-            totalCancelled,
-            totalReturned,
+            deliveryRatio,
+            cancellationRatio,
+            returnRatio,
+            volumeBand,
             fraudReports:
               totalFraudReports.length,
-            cancellationRate,
             hasHistory,
           }
         );
@@ -905,69 +822,55 @@ export const calculateRiskLevel = ({
   totalParcels = 0,
   totalCancelled = 0,
   totalFraudReports = [],
+  cancellationRatio,
+  hasHistory = false,
+  doubtfulReports = false,
 }) => {
-  const parcels =
-    toSafeNumber(
-      totalParcels
-    );
+  const fraudReportCount =
+    Array.isArray(totalFraudReports)
+      ? totalFraudReports.length
+      : toSafeNumber(totalFraudReports);
 
-  const cancelled =
-    toSafeNumber(
-      totalCancelled
-    );
-
-  let fraudReportCount = 0;
+  /* ---------- ratio based (score endpoint) ---------- */
 
   if (
-    Array.isArray(
-      totalFraudReports
-    )
+    cancellationRatio !== undefined &&
+    cancellationRatio !== null
   ) {
-    fraudReportCount =
-      totalFraudReports.length;
-  } else {
-    fraudReportCount =
-      toSafeNumber(
-        totalFraudReports
-      );
+    if (
+      !hasHistory &&
+      fraudReportCount <= 0
+    ) {
+      return "Unknown";
+    }
+
+    if (
+      fraudReportCount > 0 ||
+      doubtfulReports
+    ) {
+      return "High";
+    }
+
+    const ratio = Number(cancellationRatio) || 0;
+
+    if (ratio >= 50) return "High";
+    if (ratio >= 25) return "Medium";
+
+    return "Low";
   }
 
-  /* =====================================================
-     NO HISTORY
-  ===================================================== */
+  /* ---------- count based (old behaviour) ---------- */
 
-  if (parcels <= 0) {
-    return "Unknown";
-  }
+  const parcels = toSafeNumber(totalParcels);
+  const cancelled = toSafeNumber(totalCancelled);
 
-  /* =====================================================
-     FRAUD REPORT
-  ===================================================== */
+  if (parcels <= 0) return "Unknown";
+  if (fraudReportCount > 0) return "High";
 
-  if (
-    fraudReportCount > 0
-  ) {
-    return "High";
-  }
+  const ratio = cancelled / parcels;
 
-  /* =====================================================
-     CANCELLATION RATE
-  ===================================================== */
-
-  const cancellationRatio =
-    cancelled / parcels;
-
-  if (
-    cancellationRatio >= 0.5
-  ) {
-    return "High";
-  }
-
-  if (
-    cancellationRatio >= 0.25
-  ) {
-    return "Medium";
-  }
+  if (ratio >= 0.5) return "High";
+  if (ratio >= 0.25) return "Medium";
 
   return "Low";
 };
