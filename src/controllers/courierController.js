@@ -1,7 +1,5 @@
 import CourierSetting from "../models/courierSettingModel.js";
-
 import Order from "../models/orderModel.js";
-
 import axios from "axios";
 
 import {
@@ -18,11 +16,12 @@ import {
   checkSteadfastFraud,
   calculateRiskLevel,
   mapSteadfastStatus,
+  normalizeBdPhone,
 } from "../utils/steadfastService.js";
 
-// ======================================================
-// PATHAO BASE URL VALIDATION
-// ======================================================
+/* ======================================================
+   COMMON HELPERS
+====================================================== */
 
 const validatePathaoBaseUrl = (value) => {
   const baseUrl = String(value ?? "").trim();
@@ -48,8 +47,7 @@ const validatePathaoBaseUrl = (value) => {
   if (parsedUrl.protocol !== "https:") {
     return {
       valid: false,
-      message:
-        "Pathao API Base URL must use HTTPS.",
+      message: "Pathao API Base URL must use HTTPS.",
     };
   }
 
@@ -59,18 +57,13 @@ const validatePathaoBaseUrl = (value) => {
   };
 };
 
-// ======================================================
-// STEADFAST BASE URL VALIDATION
-// ======================================================
-
 const validateSteadfastBaseUrl = (value) => {
   const baseUrl = String(value ?? "").trim();
 
   if (!baseUrl) {
     return {
       valid: false,
-      message:
-        "SteadFast API Base URL is required.",
+      message: "SteadFast API Base URL is required.",
     };
   }
 
@@ -81,16 +74,14 @@ const validateSteadfastBaseUrl = (value) => {
   } catch {
     return {
       valid: false,
-      message:
-        "Invalid SteadFast API Base URL.",
+      message: "Invalid SteadFast API Base URL.",
     };
   }
 
   if (parsedUrl.protocol !== "https:") {
     return {
       valid: false,
-      message:
-        "SteadFast API Base URL must use HTTPS.",
+      message: "SteadFast API Base URL must use HTTPS.",
     };
   }
 
@@ -100,11 +91,145 @@ const validateSteadfastBaseUrl = (value) => {
   };
 };
 
-// ======================================================
-// PATHAO SETTINGS & CONTROLLERS
-// ======================================================
+/**
+ * Returns possible phone formats that may exist
+ * in old/new orders.
+ *
+ * Example:
+ * 017xxxxxxxx
+ * +88017xxxxxxxx
+ * 88017xxxxxxxx
+ */
+const getPhoneSearchValues = (rawPhone) => {
+  const raw = String(rawPhone ?? "").trim();
 
-export const savePathaoSettings = async (req, res) => {
+  let normalized = "";
+
+  try {
+    normalized = normalizeBdPhone(raw);
+  } catch {
+    normalized = "";
+  }
+
+  const values = new Set();
+
+  if (raw) {
+    values.add(raw);
+  }
+
+  if (normalized) {
+    values.add(normalized);
+    values.add(`+880${normalized.slice(1)}`);
+    values.add(`880${normalized.slice(1)}`);
+  }
+
+  return [...values];
+};
+
+/**
+ * Validate fraudCheck before using it.
+ */
+const isValidFraudCheck = (fraudCheck) => {
+  return (
+    fraudCheck &&
+    typeof fraudCheck === "object" &&
+    fraudCheck.checked === true &&
+    fraudCheck.checkedAt
+  );
+};
+
+/**
+ * Copy a previously checked fraud result to another order.
+ *
+ * IMPORTANT:
+ * This does NOT call SteadFast.
+ * It only reuses the MongoDB result.
+ */
+const applyFraudCheckToOrder = (
+  order,
+  fraudCheck,
+  phone
+) => {
+  order.fraudCheck = {
+    checked: true,
+    riskLevel:
+      fraudCheck.riskLevel || "Unknown",
+
+    totalOrders:
+      Number(
+        fraudCheck.totalOrders ??
+          fraudCheck.totalParcels ??
+          0
+      ),
+
+    totalParcels:
+      Number(
+        fraudCheck.totalParcels ??
+          fraudCheck.totalOrders ??
+          0
+      ),
+
+    totalDelivered:
+      Number(
+        fraudCheck.totalDelivered ??
+          fraudCheck.deliveredOrders ??
+          0
+      ),
+
+    totalCancelled:
+      Number(
+        fraudCheck.totalCancelled ??
+          fraudCheck.cancelledOrders ??
+          0
+      ),
+
+    totalReturned:
+      Number(
+        fraudCheck.totalReturned ??
+          fraudCheck.returnedOrders ??
+          0
+      ),
+
+    totalFraudReports:
+      Number(
+        fraudCheck.totalFraudReports ??
+          fraudCheck.fraudReports ??
+          0
+      ),
+
+    fraudReports:
+      Number(
+        fraudCheck.fraudReports ??
+          fraudCheck.totalFraudReports ??
+          0
+      ),
+
+    cancellationRate:
+      Number(
+        fraudCheck.cancellationRate ?? 0
+      ),
+
+    phone:
+      fraudCheck.phone || phone,
+
+    checkedAt:
+      fraudCheck.checkedAt,
+
+    courier: "steadfast",
+
+    source:
+      fraudCheck.source || "steadfast",
+  };
+};
+
+/* ======================================================
+   PATHAO SETTINGS & CONTROLLERS
+====================================================== */
+
+export const savePathaoSettings = async (
+  req,
+  res
+) => {
   try {
     const {
       clientId,
@@ -128,24 +253,21 @@ export const savePathaoSettings = async (req, res) => {
     if (!cleanClientId) {
       return res.status(400).json({
         success: false,
-        message:
-          "Pathao Client ID is required.",
+        message: "Pathao Client ID is required.",
       });
     }
 
     if (!cleanUsername) {
       return res.status(400).json({
         success: false,
-        message:
-          "Pathao Username is required.",
+        message: "Pathao Username is required.",
       });
     }
 
     if (!cleanStoreId) {
       return res.status(400).json({
         success: false,
-        message:
-          "Pathao Store ID is required.",
+        message: "Pathao Store ID is required.",
       });
     }
 
@@ -504,7 +626,9 @@ export const pushOrderToPathao = async (
       "Pending";
 
     const mappedStatus =
-      mapCourierStatus(currentStatus);
+      mapCourierStatus(
+        currentStatus
+      );
 
     order.courier = {
       name: "pathao",
@@ -689,7 +813,9 @@ export const syncPathaoOrder = async (
       "Unknown";
 
     const mappedStatus =
-      mapCourierStatus(courierStatus);
+      mapCourierStatus(
+        courierStatus
+      );
 
     if (order.courier) {
       order.courier.status =
@@ -742,9 +868,9 @@ export const syncPathaoOrder = async (
   }
 };
 
-// ======================================================
-// STEADFAST SETTINGS & CONTROLLERS
-// ======================================================
+/* ======================================================
+   STEADFAST SETTINGS
+====================================================== */
 
 export const saveSteadfastSettings = async (
   req,
@@ -769,13 +895,11 @@ export const saveSteadfastSettings = async (
     const incomingSecretKey =
       String(secretKey ?? "").trim();
 
-    // Preserve existing secret if input is blank
     const finalSecretKey =
       incomingSecretKey ||
       existingSetting?.secretKey ||
       "";
 
-    // Preserve existing API key if input is blank
     const finalApiKey =
       cleanApiKey ||
       existingSetting?.apiKey ||
@@ -821,8 +945,7 @@ export const saveSteadfastSettings = async (
     const finalIsActive =
       typeof isActive === "boolean"
         ? isActive
-        : existingSetting?.isActive ??
-          true;
+        : existingSetting?.isActive ?? true;
 
     const updatedSetting =
       await CourierSetting.findOneAndUpdate(
@@ -939,576 +1062,945 @@ export const getSteadfastSettings = async (
   }
 };
 
-export const testSteadfastConnection = async (
-  req,
-  res
-) => {
-  try {
-    const setting =
-      await CourierSetting.findOne({
-        courierName: "steadfast",
-      });
+export const testSteadfastConnection =
+  async (req, res) => {
+    try {
+      const setting =
+        await CourierSetting.findOne({
+          courierName: "steadfast",
+        });
 
-    if (!setting) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "SteadFast settings not found. Please save settings first.",
-      });
-    }
+      if (!setting) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "SteadFast settings not found. Please save settings first.",
+        });
+      }
 
-    if (
-      !setting.apiKey ||
-      !setting.secretKey ||
-      !setting.baseUrl
-    ) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "SteadFast credentials are incomplete.",
-      });
-    }
-
-    const balanceResponse =
-      await getSteadfastBalance(
-        setting
-      );
-
-    return res.status(200).json({
-      success: true,
-      message:
-        "SteadFast connection successful.",
-      data: balanceResponse,
-    });
-  } catch (error) {
-    console.error(
-      "SteadFast Test Connection Error:",
-      error
-    );
-
-    return res.status(500).json({
-      success: false,
-      message:
-        error.message ||
-        "SteadFast connection failed.",
-    });
-  }
-};
-
-// ======================================================
-// PUSH ORDER TO STEADFAST
-// ======================================================
-
-export const pushOrderToSteadfast = async (
-  req,
-  res
-) => {
-  try {
-    const { orderId } = req.params;
-
-    const order =
-      await Order.findById(orderId);
-
-    if (!order) {
-      return res.status(404).json({
-        success: false,
-        message: "Order not found.",
-      });
-    }
-
-    // -----------------------------------------------
-    // BLOCK IF ANY COURIER IS ALREADY ASSIGNED
-    // -----------------------------------------------
-
-    const existingCourierName =
-      String(
-        order.courier?.name ||
-          order.courier?.provider ||
-          order.courierName ||
-          ""
-      )
-        .trim()
-        .toLowerCase();
-
-    const existingConsignmentId =
-      order.courier?.consignmentId ||
-      order.consignmentId ||
-      order.consignment_id ||
-      "";
-
-    if (
-      existingCourierName ||
-      existingConsignmentId
-    ) {
       if (
-        existingCourierName ===
-          "steadfast" ||
-        existingCourierName ===
-          "steadfast courier"
+        !setting.apiKey ||
+        !setting.secretKey ||
+        !setting.baseUrl
       ) {
         return res.status(400).json({
           success: false,
           message:
-            "This order is already submitted to SteadFast.",
+            "SteadFast credentials are incomplete.",
+        });
+      }
+
+      const balanceResponse =
+        await getSteadfastBalance(
+          setting
+        );
+
+      return res.status(200).json({
+        success: true,
+        message:
+          "SteadFast connection successful.",
+        data: balanceResponse,
+      });
+    } catch (error) {
+      console.error(
+        "SteadFast Test Connection Error:",
+        error
+      );
+
+      return res.status(500).json({
+        success: false,
+        message:
+          error.message ||
+          "SteadFast connection failed.",
+      });
+    }
+  };
+
+/* ======================================================
+   PUSH ORDER TO STEADFAST
+====================================================== */
+
+export const pushOrderToSteadfast =
+  async (req, res) => {
+    try {
+      const { orderId } = req.params;
+
+      const order =
+        await Order.findById(orderId);
+
+      if (!order) {
+        return res.status(404).json({
+          success: false,
+          message: "Order not found.",
+        });
+      }
+
+      const existingCourierName =
+        String(
+          order.courier?.name ||
+            order.courier?.provider ||
+            order.courierName ||
+            ""
+        )
+          .trim()
+          .toLowerCase();
+
+      const existingConsignmentId =
+        order.courier?.consignmentId ||
+        order.consignmentId ||
+        order.consignment_id ||
+        "";
+
+      if (
+        existingCourierName ||
+        existingConsignmentId
+      ) {
+        if (
+          existingCourierName ===
+            "steadfast" ||
+          existingCourierName ===
+            "steadfast courier"
+        ) {
+          return res.status(400).json({
+            success: false,
+            message:
+              "This order is already submitted to SteadFast.",
+            consignmentId:
+              existingConsignmentId || null,
+          });
+        }
+
+        return res.status(400).json({
+          success: false,
+          message: `This order is already assigned to ${
+            existingCourierName ||
+            "another courier"
+          }.`,
+          courier:
+            existingCourierName || null,
           consignmentId:
             existingConsignmentId || null,
         });
       }
 
-      return res.status(400).json({
-        success: false,
-        message: `This order is already assigned to ${
-          existingCourierName ||
-          "another courier"
-        }.`,
-        courier:
-          existingCourierName || null,
+      const setting =
+        await CourierSetting.findOne({
+          courierName: "steadfast",
+          isActive: true,
+        });
+
+      if (!setting) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Active SteadFast settings not found.",
+        });
+      }
+
+      if (
+        !setting.apiKey ||
+        !setting.secretKey ||
+        !setting.baseUrl
+      ) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "SteadFast API Key, Secret Key and Base URL are required.",
+        });
+      }
+
+      const steadfastResponse =
+        await sendOrderToSteadfastAPI(
+          order,
+          setting
+        );
+
+      const responseData =
+        steadfastResponse?.data ||
+        steadfastResponse;
+
+      const consignmentData =
+        responseData?.consignment ||
+        responseData?.consignment_data ||
+        responseData;
+
+      const consignmentId =
+        consignmentData?.consignment_id ||
+        consignmentData?.consignmentId ||
+        consignmentData?.id ||
+        responseData?.consignment_id ||
+        responseData?.consignmentId ||
+        responseData?.id ||
+        null;
+
+      const trackingCode =
+        consignmentData?.tracking_code ||
+        consignmentData?.trackingCode ||
+        responseData?.tracking_code ||
+        responseData?.trackingCode ||
+        null;
+
+      if (!consignmentId) {
+        return res.status(500).json({
+          success: false,
+          message:
+            "SteadFast order created response received, but consignment ID was not found.",
+          response:
+            steadfastResponse,
+        });
+      }
+
+      const courierStatus =
+        consignmentData?.status ||
+        responseData?.status ||
+        "Pending";
+
+      const mappedStatus =
+        mapSteadfastStatus(
+          courierStatus
+        );
+
+      order.courier = {
+        name: "steadfast",
         consignmentId:
-          existingConsignmentId || null,
+          String(consignmentId),
+        trackingCode: trackingCode
+          ? String(trackingCode)
+          : "",
+        status: mappedStatus,
+        submittedAt: new Date(),
+      };
+
+      order.courierName =
+        "steadfast";
+
+      order.consignmentId =
+        String(consignmentId);
+
+      if (trackingCode) {
+        order.trackingCode =
+          String(trackingCode);
+      }
+
+      if (
+        !Array.isArray(
+          order.trackingHistory
+        )
+      ) {
+        order.trackingHistory = [];
+      }
+
+      order.trackingHistory.push({
+        courier: "steadfast",
+        status: mappedStatus,
+        consignmentId:
+          String(consignmentId),
+        trackingCode: trackingCode
+          ? String(trackingCode)
+          : "",
+        timestamp: new Date(),
       });
-    }
 
-    // -----------------------------------------------
-    // CHECK ACTIVE SETTINGS
-    // -----------------------------------------------
+      await order.save();
 
-    const setting =
-      await CourierSetting.findOne({
-        courierName: "steadfast",
-        isActive: true,
-      });
-
-    if (!setting) {
-      return res.status(400).json({
-        success: false,
+      return res.status(200).json({
+        success: true,
         message:
-          "Active SteadFast settings not found.",
+          "Order successfully submitted to SteadFast.",
+        data: {
+          consignmentId,
+          trackingCode,
+          status: mappedStatus,
+          response:
+            steadfastResponse,
+        },
       });
-    }
-
-    if (
-      !setting.apiKey ||
-      !setting.secretKey ||
-      !setting.baseUrl
-    ) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "SteadFast API Key, Secret Key and Base URL are required.",
-      });
-    }
-
-    // -----------------------------------------------
-    // SEND ORDER
-    // -----------------------------------------------
-
-    const steadfastResponse =
-      await sendOrderToSteadfastAPI(
-        order,
-        setting
+    } catch (error) {
+      console.error(
+        "SteadFast Create Order Error:",
+        error
       );
 
-    const responseData =
-      steadfastResponse?.data ||
-      steadfastResponse;
-
-    const consignmentData =
-      responseData?.consignment ||
-      responseData?.consignment_data ||
-      responseData;
-
-    const consignmentId =
-      consignmentData?.consignment_id ||
-      consignmentData?.consignmentId ||
-      consignmentData?.id ||
-      responseData?.consignment_id ||
-      responseData?.consignmentId ||
-      responseData?.id ||
-      null;
-
-    const trackingCode =
-      consignmentData?.tracking_code ||
-      consignmentData?.trackingCode ||
-      responseData?.tracking_code ||
-      responseData?.trackingCode ||
-      null;
-
-    if (!consignmentId) {
       return res.status(500).json({
         success: false,
         message:
-          "SteadFast order created response received, but consignment ID was not found.",
-        response:
-          steadfastResponse,
+          error.message ||
+          "Failed to send order to SteadFast.",
       });
     }
+  };
 
-    const courierStatus =
-      consignmentData?.status ||
-      responseData?.status ||
-      "Pending";
+/* ======================================================
+   SYNC STEADFAST ORDER STATUS
+====================================================== */
 
-    const mappedStatus =
-      mapSteadfastStatus(
-        courierStatus
-      );
+export const syncSteadfastOrder =
+  async (req, res) => {
+    try {
+      const { orderId } = req.params;
 
-    // -----------------------------------------------
-    // SAVE COURIER DATA
-    // -----------------------------------------------
+      const order =
+        await Order.findById(orderId);
 
-    order.courier = {
-      name: "steadfast",
-      consignmentId:
-        String(consignmentId),
-      trackingCode: trackingCode
-        ? String(trackingCode)
-        : "",
-      status: mappedStatus,
-      submittedAt: new Date(),
-    };
-
-    order.courierName = "steadfast";
-
-    order.consignmentId =
-      String(consignmentId);
-
-    if (trackingCode) {
-      order.trackingCode =
-        String(trackingCode);
-    }
-
-    if (
-      !Array.isArray(
-        order.trackingHistory
-      )
-    ) {
-      order.trackingHistory = [];
-    }
-
-    order.trackingHistory.push({
-      courier: "steadfast",
-      status: mappedStatus,
-      consignmentId:
-        String(consignmentId),
-      trackingCode: trackingCode
-        ? String(trackingCode)
-        : "",
-      timestamp: new Date(),
-    });
-
-    await order.save();
-
-    return res.status(200).json({
-      success: true,
-      message:
-        "Order successfully submitted to SteadFast.",
-      data: {
-        consignmentId,
-        trackingCode,
-        status: mappedStatus,
-        response:
-          steadfastResponse,
-      },
-    });
-  } catch (error) {
-    console.error(
-      "SteadFast Create Order Error:",
-      error
-    );
-
-    return res.status(500).json({
-      success: false,
-      message:
-        error.message ||
-        "Failed to send order to SteadFast.",
-    });
-  }
-};
-
-// ======================================================
-// SYNC STEADFAST ORDER STATUS
-// ======================================================
-
-export const syncSteadfastOrder = async (
-  req,
-  res
-) => {
-  try {
-    const { orderId } = req.params;
-
-    const order =
-      await Order.findById(orderId);
-
-    if (!order) {
-      return res.status(404).json({
-        success: false,
-        message: "Order not found.",
-      });
-    }
-
-    const consignmentId =
-      order.courier?.consignmentId ||
-      order.consignmentId ||
-      order.consignment_id;
-
-    if (!consignmentId) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "This order does not have a SteadFast consignment ID.",
-      });
-    }
-
-    const setting =
-      await CourierSetting.findOne({
-        courierName: "steadfast",
-        isActive: true,
-      });
-
-    if (!setting) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Active SteadFast settings not found.",
-      });
-    }
-
-    if (
-      !setting.apiKey ||
-      !setting.secretKey ||
-      !setting.baseUrl
-    ) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "SteadFast credentials are incomplete.",
-      });
-    }
-
-    const response =
-      await getSteadfastOrderStatus(
-        consignmentId,
-        setting
-      );
-
-    const responseData =
-      response?.data ||
-      response;
-
-    const courierStatus =
-      responseData?.delivery_status ||
-      responseData?.deliveryStatus ||
-      responseData?.status ||
-      "Unknown";
-
-    const mappedStatus =
-      mapSteadfastStatus(
-        courierStatus
-      );
-
-    if (order.courier) {
-      order.courier.status =
-        mappedStatus;
-
-      order.courier.lastSyncedAt =
-        new Date();
-    }
-
-    if (
-      !Array.isArray(
-        order.trackingHistory
-      )
-    ) {
-      order.trackingHistory = [];
-    }
-
-    order.trackingHistory.push({
-      courier: "steadfast",
-      status: mappedStatus,
-      consignmentId:
-        String(consignmentId),
-      timestamp: new Date(),
-    });
-
-    await order.save();
-
-    return res.status(200).json({
-      success: true,
-      message:
-        "SteadFast order status synced.",
-      data: {
-        courierStatus,
-        status: mappedStatus,
-        consignmentId,
-      },
-    });
-  } catch (error) {
-    console.error(
-      "SteadFast Sync Order Error:",
-      error
-    );
-
-    return res.status(500).json({
-      success: false,
-      message:
-        error.message ||
-        "Failed to sync SteadFast order.",
-    });
-  }
-};
-
-// ======================================================
-// CHECK STEADFAST FRAUD
-// ======================================================
-
-export const checkSteadfastOrderFraud = async (
-  req,
-  res
-) => {
-  try {
-    const { orderId } = req.params;
-
-    const order =
-      await Order.findById(orderId);
-
-    if (!order) {
-      return res.status(404).json({
-        success: false,
-        message: "Order not found.",
-      });
-    }
-
-    if (!order.phoneNumber) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Customer phone number is missing.",
-      });
-    }
-
-    const setting =
-      await CourierSetting.findOne({
-        courierName: "steadfast",
-        isActive: true,
-      });
-
-    if (!setting) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Active SteadFast settings not found.",
-      });
-    }
-
-    if (
-      !setting.apiKey ||
-      !setting.secretKey ||
-      !setting.baseUrl
-    ) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "SteadFast credentials are incomplete.",
-      });
-    }
-
-    // -----------------------------------------------
-    // USE PLAIN CREDENTIAL OBJECT
-    // -----------------------------------------------
-
-    const fraudCredentials = {
-      baseUrl: setting.baseUrl,
-      apiKey: setting.apiKey,
-      secretKey: setting.secretKey,
-    };
-
-    console.log(
-      "STEADFAST FRAUD CREDENTIAL CHECK:",
-      {
-        hasBaseUrl:
-          Boolean(
-            fraudCredentials.baseUrl
-          ),
-        hasApiKey:
-          Boolean(
-            fraudCredentials.apiKey
-          ),
-        hasSecretKey:
-          Boolean(
-            fraudCredentials.secretKey
-          ),
+      if (!order) {
+        return res.status(404).json({
+          success: false,
+          message: "Order not found.",
+        });
       }
-    );
 
-    const fraudData =
-      await checkSteadfastFraud(
-        order.phoneNumber,
-        fraudCredentials
-      );
+      const consignmentId =
+        order.courier?.consignmentId ||
+        order.consignmentId ||
+        order.consignment_id;
 
-    const riskLevel =
-      calculateRiskLevel(
-        fraudData
-      );
+      if (!consignmentId) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "This order does not have a SteadFast consignment ID.",
+        });
+      }
 
-    // -----------------------------------------------
-    // SAVE FRAUD RESULT
-    // -----------------------------------------------
+      const setting =
+        await CourierSetting.findOne({
+          courierName: "steadfast",
+          isActive: true,
+        });
 
-    if (
-      order.fraudCheck &&
-      typeof order.fraudCheck === "object"
-    ) {
-      order.fraudCheck = {
-        ...order.fraudCheck,
-        checked: true,
-        riskLevel,
-        totalParcels:
-          fraudData.totalParcels,
-        totalDelivered:
-          fraudData.totalDelivered,
-        totalCancelled:
-          fraudData.totalCancelled,
-        totalFraudReports:
-          fraudData.totalFraudReports,
-        checkedAt: new Date(),
+      if (!setting) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Active SteadFast settings not found.",
+        });
+      }
+
+      if (
+        !setting.apiKey ||
+        !setting.secretKey ||
+        !setting.baseUrl
+      ) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "SteadFast credentials are incomplete.",
+        });
+      }
+
+      const response =
+        await getSteadfastOrderStatus(
+          consignmentId,
+          setting
+        );
+
+      const responseData =
+        response?.data ||
+        response;
+
+      const courierStatus =
+        responseData?.delivery_status ||
+        responseData?.deliveryStatus ||
+        responseData?.status ||
+        "Unknown";
+
+      const mappedStatus =
+        mapSteadfastStatus(
+          courierStatus
+        );
+
+      if (order.courier) {
+        order.courier.status =
+          mappedStatus;
+
+        order.courier.lastSyncedAt =
+          new Date();
+      }
+
+      if (
+        !Array.isArray(
+          order.trackingHistory
+        )
+      ) {
+        order.trackingHistory = [];
+      }
+
+      order.trackingHistory.push({
         courier: "steadfast",
+        status: mappedStatus,
+        consignmentId:
+          String(consignmentId),
+        timestamp: new Date(),
+      });
+
+      await order.save();
+
+      return res.status(200).json({
+        success: true,
+        message:
+          "SteadFast order status synced.",
+        data: {
+          courierStatus,
+          status: mappedStatus,
+          consignmentId,
+        },
+      });
+    } catch (error) {
+      console.error(
+        "SteadFast Sync Order Error:",
+        error
+      );
+
+      return res.status(500).json({
+        success: false,
+        message:
+          error.message ||
+          "Failed to sync SteadFast order.",
+      });
+    }
+  };
+
+/* ======================================================
+   CHECK STEADFAST FRAUD
+====================================================== */
+
+export const checkSteadfastOrderFraud =
+  async (req, res) => {
+    try {
+      const { orderId } = req.params;
+
+      const order =
+        await Order.findById(orderId);
+
+      if (!order) {
+        return res.status(404).json({
+          success: false,
+          message: "Order not found.",
+        });
+      }
+
+      if (!order.phoneNumber) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Customer phone number is missing.",
+        });
+      }
+
+      /* -----------------------------------------------
+         NORMALIZE PHONE
+      ------------------------------------------------ */
+
+      let normalizedPhone;
+
+      try {
+        normalizedPhone =
+          normalizeBdPhone(
+            order.phoneNumber
+          );
+      } catch (error) {
+        return res.status(400).json({
+          success: false,
+          message:
+            error.message ||
+            "Invalid Bangladeshi phone number.",
+        });
+      }
+
+      /* -----------------------------------------------
+         ACTIVE SETTINGS
+      ------------------------------------------------ */
+
+      const setting =
+        await CourierSetting.findOne({
+          courierName: "steadfast",
+          isActive: true,
+        });
+
+      if (!setting) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Active SteadFast settings not found.",
+        });
+      }
+
+      if (
+        !setting.apiKey ||
+        !setting.secretKey ||
+        !setting.baseUrl
+      ) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "SteadFast credentials are incomplete.",
+        });
+      }
+
+      /* -----------------------------------------------
+         1. CURRENT ORDER ALREADY CHECKED?
+         -----------------------------------------------
+         If this exact order already has fraud data,
+         don't call SteadFast again.
+      ------------------------------------------------ */
+
+      if (
+        isValidFraudCheck(
+          order.fraudCheck
+        )
+      ) {
+        return res.status(200).json({
+          success: true,
+          cached: true,
+          source: "current-order",
+          message:
+            "Fraud result already exists for this order.",
+          data: {
+            phone:
+              order.fraudCheck.phone ||
+              normalizedPhone,
+
+            totalParcels:
+              Number(
+                order.fraudCheck.totalParcels ??
+                  order.fraudCheck.totalOrders ??
+                  0
+              ),
+
+            totalDelivered:
+              Number(
+                order.fraudCheck.totalDelivered ??
+                  order.fraudCheck.deliveredOrders ??
+                  0
+              ),
+
+            totalCancelled:
+              Number(
+                order.fraudCheck.totalCancelled ??
+                  order.fraudCheck.cancelledOrders ??
+                  0
+              ),
+
+            totalReturned:
+              Number(
+                order.fraudCheck.totalReturned ??
+                  order.fraudCheck.returnedOrders ??
+                  0
+              ),
+
+            totalFraudReports:
+              Number(
+                order.fraudCheck.totalFraudReports ??
+                  order.fraudCheck.fraudReports ??
+                  0
+              ),
+
+            cancellationRate:
+              Number(
+                order.fraudCheck.cancellationRate ??
+                  0
+              ),
+
+            riskLevel:
+              order.fraudCheck.riskLevel ||
+              "Unknown",
+
+            checkedAt:
+              order.fraudCheck.checkedAt,
+          },
+        });
+      }
+
+      /* -----------------------------------------------
+         2. SEARCH DATABASE FOR SAME PHONE
+         -----------------------------------------------
+         This is the IMPORTANT quota protection.
+
+         If another order with the same phone was already
+         checked, reuse its result.
+
+         No SteadFast API request.
+      ------------------------------------------------ */
+
+      const phoneSearchValues =
+        getPhoneSearchValues(
+          order.phoneNumber
+        );
+
+      const previousOrder =
+        await Order.findOne({
+          _id: {
+            $ne: order._id,
+          },
+
+          phoneNumber: {
+            $in: phoneSearchValues,
+          },
+
+          "fraudCheck.checked": true,
+
+          "fraudCheck.checkedAt": {
+            $exists: true,
+          },
+        })
+          .sort({
+            "fraudCheck.checkedAt": -1,
+          })
+          .lean();
+
+      if (
+        previousOrder &&
+        isValidFraudCheck(
+          previousOrder.fraudCheck
+        )
+      ) {
+        console.log(
+          "STEADFAST FRAUD CACHE HIT:",
+          {
+            currentOrder:
+              String(order._id),
+
+            sourceOrder:
+              String(previousOrder._id),
+
+            phone:
+              normalizedPhone,
+          }
+        );
+
+        applyFraudCheckToOrder(
+          order,
+          previousOrder.fraudCheck,
+          normalizedPhone
+        );
+
+        /*
+         * Keep source information so admin/debugging
+         * can understand this result was reused.
+         */
+        order.fraudCheck.source =
+          "database-cache";
+
+        await order.save();
+
+        return res.status(200).json({
+          success: true,
+          cached: true,
+          source: "database-cache",
+
+          message:
+            "Existing SteadFast fraud result reused for this phone number.",
+
+          data: {
+            phone:
+              normalizedPhone,
+
+            totalParcels:
+              Number(
+                previousOrder.fraudCheck
+                  .totalParcels ??
+                  previousOrder.fraudCheck
+                    .totalOrders ??
+                  0
+              ),
+
+            totalDelivered:
+              Number(
+                previousOrder.fraudCheck
+                  .totalDelivered ??
+                  previousOrder.fraudCheck
+                    .deliveredOrders ??
+                  0
+              ),
+
+            totalCancelled:
+              Number(
+                previousOrder.fraudCheck
+                  .totalCancelled ??
+                  previousOrder.fraudCheck
+                    .cancelledOrders ??
+                  0
+              ),
+
+            totalReturned:
+              Number(
+                previousOrder.fraudCheck
+                  .totalReturned ??
+                  previousOrder.fraudCheck
+                    .returnedOrders ??
+                  0
+              ),
+
+            totalFraudReports:
+              Number(
+                previousOrder.fraudCheck
+                  .totalFraudReports ??
+                  previousOrder.fraudCheck
+                    .fraudReports ??
+                  0
+              ),
+
+            cancellationRate:
+              Number(
+                previousOrder.fraudCheck
+                  .cancellationRate ??
+                  0
+              ),
+
+            riskLevel:
+              previousOrder.fraudCheck
+                .riskLevel ||
+              "Unknown",
+
+            checkedAt:
+              previousOrder.fraudCheck
+                .checkedAt,
+          },
+        });
+      }
+
+      /* -----------------------------------------------
+         3. NO DATABASE CACHE
+         -----------------------------------------------
+         This is a NEW phone.
+
+         Now and ONLY now call SteadFast.
+      ------------------------------------------------ */
+
+      const fraudCredentials = {
+        baseUrl: setting.baseUrl,
+        apiKey: setting.apiKey,
+        secretKey: setting.secretKey,
+      };
+
+      console.log(
+        "STEADFAST FRAUD API REQUEST:",
+        {
+          phone: normalizedPhone,
+          hasBaseUrl:
+            Boolean(
+              fraudCredentials.baseUrl
+            ),
+          hasApiKey:
+            Boolean(
+              fraudCredentials.apiKey
+            ),
+          hasSecretKey:
+            Boolean(
+              fraudCredentials.secretKey
+            ),
+        }
+      );
+
+      let fraudData;
+
+      try {
+        fraudData =
+          await checkSteadfastFraud(
+            normalizedPhone,
+            fraudCredentials
+          );
+      } catch (error) {
+        const message =
+          String(
+            error?.message || ""
+          );
+
+        /* -------------------------------------------
+           RATE LIMIT
+        -------------------------------------------- */
+
+        if (
+          error?.response?.status === 429 ||
+          message
+            .toLowerCase()
+            .includes("rate limit") ||
+          message
+            .toLowerCase()
+            .includes("429")
+        ) {
+          return res.status(429).json({
+            success: false,
+            code:
+              "STEADFAST_FRAUD_RATE_LIMIT",
+            message:
+              "SteadFast fraud-check limit reached. Please try again later.",
+            retryable: true,
+          });
+        }
+
+        throw error;
+      }
+
+      /* -----------------------------------------------
+         4. CALCULATE RISK
+      ------------------------------------------------ */
+
+      const riskLevel =
+        calculateRiskLevel(
+          fraudData
+        );
+
+      const totalParcels =
+        Number(
+          fraudData.totalParcels || 0
+        );
+
+      const totalDelivered =
+        Number(
+          fraudData.totalDelivered || 0
+        );
+
+      const totalCancelled =
+        Number(
+          fraudData.totalCancelled || 0
+        );
+
+      const totalReturned =
+        Number(
+          fraudData.totalReturned || 0
+        );
+
+      const totalFraudReports =
+        Number(
+          fraudData.totalFraudReports ||
+            0
+        );
+
+      const cancellationRate =
+        Number(
+          fraudData.cancellationRate || 0
+        );
+
+      /* -----------------------------------------------
+         5. SAVE NEW FRAUD RESULT
+      ------------------------------------------------ */
+
+      order.fraudCheck = {
+        checked: true,
+
+        riskLevel,
+
+        phone:
+          fraudData.phone ||
+          normalizedPhone,
+
+        totalOrders:
+          totalParcels,
+
+        totalParcels,
+
+        totalDelivered,
+
+        deliveredOrders:
+          totalDelivered,
+
+        totalCancelled,
+
+        cancelledOrders:
+          totalCancelled,
+
+        totalReturned,
+
+        returnedOrders:
+          totalReturned,
+
+        totalFraudReports,
+
+        fraudReports:
+          totalFraudReports,
+
+        cancellationRate,
+
+        checkedAt: new Date(),
+
+        courier: "steadfast",
+
+        source: "steadfast-api",
       };
 
       await order.save();
+
+      console.log(
+        "STEADFAST FRAUD RESULT SAVED:",
+        {
+          orderId:
+            String(order._id),
+          phone:
+            normalizedPhone,
+          totalParcels,
+          totalDelivered,
+          totalCancelled,
+          totalReturned,
+          totalFraudReports,
+          cancellationRate,
+          riskLevel,
+        }
+      );
+
+      /* -----------------------------------------------
+         6. RESPONSE
+      ------------------------------------------------ */
+
+      return res.status(200).json({
+        success: true,
+        cached: false,
+        source: "steadfast-api",
+
+        message:
+          "SteadFast fraud check completed.",
+
+        data: {
+          phone:
+            fraudData.phone ||
+            normalizedPhone,
+
+          totalParcels,
+
+          totalDelivered,
+
+          totalCancelled,
+
+          totalReturned,
+
+          totalFraudReports,
+
+          cancellationRate,
+
+          riskLevel,
+
+          checkedAt:
+            order.fraudCheck.checkedAt,
+
+          raw:
+            fraudData.raw,
+        },
+      });
+    } catch (error) {
+      console.error(
+        "SteadFast Fraud Check Error:",
+        error
+      );
+
+      const statusCode =
+        error?.response?.status;
+
+      if (statusCode === 429) {
+        return res.status(429).json({
+          success: false,
+          code:
+            "STEADFAST_FRAUD_RATE_LIMIT",
+          message:
+            "SteadFast fraud-check limit reached. Please try again later.",
+          retryable: true,
+        });
+      }
+
+      return res.status(500).json({
+        success: false,
+        message:
+          error.message ||
+          "Failed to check SteadFast fraud data.",
+      });
     }
-
-    return res.status(200).json({
-      success: true,
-      message:
-        "SteadFast fraud check completed.",
-      data: {
-        phone:
-          fraudData.phone,
-        totalParcels:
-          fraudData.totalParcels,
-        totalDelivered:
-          fraudData.totalDelivered,
-        totalCancelled:
-          fraudData.totalCancelled,
-        totalFraudReports:
-          fraudData.totalFraudReports,
-        riskLevel,
-        raw: fraudData.raw,
-      },
-    });
-  } catch (error) {
-    console.error(
-      "SteadFast Fraud Check Error:",
-      error
-    );
-
-    return res.status(500).json({
-      success: false,
-      message:
-        error.message ||
-        "Failed to check SteadFast fraud data.",
-    });
-  }
-};
+  };

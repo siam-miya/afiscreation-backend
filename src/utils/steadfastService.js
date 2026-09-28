@@ -1,7 +1,15 @@
 import axios from "axios";
 
+/* =========================================================
+   DEFAULT STEADFAST BASE URL
+========================================================= */
+
 const DEFAULT_STEADFAST_BASE_URL =
   "https://portal.packzy.com/api/v1";
+
+/* =========================================================
+   STEADFAST CONFIG
+========================================================= */
 
 const getSteadfastConfig = (credentials = {}) => {
   const baseUrl = String(
@@ -19,15 +27,6 @@ const getSteadfastConfig = (credentials = {}) => {
     credentials?.secretKey || ""
   ).trim();
 
-  console.log(
-    "STEADFAST CONFIG CHECK:",
-    {
-      baseUrl,
-      hasApiKey: Boolean(apiKey),
-      hasSecretKey: Boolean(secretKey),
-    }
-  );
-
   if (!baseUrl) {
     throw new Error(
       "SteadFast Base URL is missing."
@@ -38,7 +37,7 @@ const getSteadfastConfig = (credentials = {}) => {
 
   try {
     parsedUrl = new URL(baseUrl);
-  } catch (error) {
+  } catch {
     throw new Error(
       "Invalid SteadFast Base URL."
     );
@@ -79,26 +78,36 @@ export const normalizeBdPhone = (rawPhone) => {
     .replace(/\s+/g, "")
     .replace(/-/g, "");
 
-  // +8801712345678
-  // -> 01712345678
+  /*
+    +8801712345678
+    ->
+    01712345678
+  */
+
   if (phone.startsWith("+880")) {
     phone = `0${phone.slice(4)}`;
   }
 
-  // 8801712345678
-  // -> 01712345678
+  /*
+    8801712345678
+    ->
+    01712345678
+  */
+
   else if (phone.startsWith("880")) {
     phone = `0${phone.slice(3)}`;
   }
 
-  // Must be:
-  // 013XXXXXXXX
-  // 014XXXXXXXX
-  // 015XXXXXXXX
-  // 016XXXXXXXX
-  // 017XXXXXXXX
-  // 018XXXXXXXX
-  // 019XXXXXXXX
+  /*
+    Supported Bangladesh mobile prefixes:
+    013
+    014
+    015
+    016
+    017
+    018
+    019
+  */
 
   if (!/^01[3-9]\d{8}$/.test(phone)) {
     throw new Error(
@@ -201,7 +210,10 @@ export const sendOrderToSteadfastAPI = async (
     );
   }
 
-  if (!codAmount || codAmount < 0) {
+  if (
+    !Number.isFinite(codAmount) ||
+    codAmount < 0
+  ) {
     throw new Error(
       "Invalid COD amount."
     );
@@ -226,30 +238,13 @@ export const sendOrderToSteadfastAPI = async (
   }
 
   console.log(
-    "================================================"
-  );
-
-  console.log(
-    "STEADFAST CREATE ORDER REQUEST"
-  );
-
-  console.log({
-    baseUrl: config.baseUrl,
-    invoice: payload.invoice,
-    recipientName:
-      payload.recipient_name,
-    recipientPhone:
-      payload.recipient_phone,
-    recipientAddress:
-      payload.recipient_address,
-    codAmount:
-      payload.cod_amount,
-    totalLot:
-      payload.total_lot,
-  });
-
-  console.log(
-    "================================================"
+    "STEADFAST CREATE ORDER REQUEST",
+    {
+      invoice: payload.invoice,
+      codAmount: payload.cod_amount,
+      totalLot: payload.total_lot,
+      baseUrl: config.baseUrl,
+    }
   );
 
   try {
@@ -259,10 +254,8 @@ export const sendOrderToSteadfastAPI = async (
         payload,
         {
           headers: {
-            "Api-Key":
-              config.apiKey,
-            "Secret-Key":
-              config.secretKey,
+            "Api-Key": config.apiKey,
+            "Secret-Key": config.secretKey,
             "Content-Type":
               "application/json",
             Accept:
@@ -273,26 +266,14 @@ export const sendOrderToSteadfastAPI = async (
       );
 
     console.log(
-      "STEADFAST CREATE ORDER RESPONSE"
-    );
-
-    console.log(
+      "STEADFAST CREATE ORDER RESPONSE",
       response.data
     );
 
     return response.data;
   } catch (error) {
     console.error(
-      "STEADFAST CREATE ORDER ERROR"
-    );
-
-    console.error(
-      "HTTP Status:",
-      error?.response?.status
-    );
-
-    console.error(
-      "SteadFast Response:",
+      "STEADFAST CREATE ORDER ERROR:",
       error?.response?.data ||
         error?.message
     );
@@ -331,10 +312,8 @@ export const getSteadfastOrderStatus = async (
         )}`,
         {
           headers: {
-            "Api-Key":
-              config.apiKey,
-            "Secret-Key":
-              config.secretKey,
+            "Api-Key": config.apiKey,
+            "Secret-Key": config.secretKey,
             Accept:
               "application/json",
           },
@@ -375,10 +354,8 @@ export const getSteadfastBalance = async (
         `${config.baseUrl}/get_balance`,
         {
           headers: {
-            "Api-Key":
-              config.apiKey,
-            "Secret-Key":
-              config.secretKey,
+            "Api-Key": config.apiKey,
+            "Secret-Key": config.secretKey,
             Accept:
               "application/json",
           },
@@ -404,8 +381,7 @@ export const getSteadfastBalance = async (
 };
 
 /* =========================================================
-   HELPER
-   CONVERT VALUE TO NUMBER SAFELY
+   SAFE NUMBER
 ========================================================= */
 
 const toSafeNumber = (
@@ -429,23 +405,94 @@ const toSafeNumber = (
 
 /* =========================================================
    FRAUD CACHE
-   5 MINUTES PER PHONE
+
+   IMPORTANT:
+
+   Same phone => cached result.
+
+   This prevents repeated SteadFast fraud
+   searches for the same phone.
+
+   30 minutes in application memory.
 ========================================================= */
 
 const FRAUD_CACHE_TTL =
-  5 * 60 * 1000;
+  30 * 60 * 1000;
 
-// phone -> { data, expiresAt }
+/*
+  phone -> {
+    data,
+    expiresAt
+  }
+*/
+
 const fraudCache = new Map();
 
-// phone -> Promise
-// Prevents multiple simultaneous requests
-// for the same phone number.
+/*
+  phone -> Promise
+
+  Prevents multiple simultaneous
+  requests for same phone.
+*/
+
 const fraudRequests = new Map();
 
 /* =========================================================
+   FRAUD CACHE CLEANUP
+
+   Prevent memory growth from many unique phones.
+========================================================= */
+
+const MAX_FRAUD_CACHE_SIZE = 5000;
+
+const cleanupFraudCache = () => {
+  const now = Date.now();
+
+  for (
+    const [phone, cached] of fraudCache.entries()
+  ) {
+    if (
+      !cached ||
+      cached.expiresAt <= now
+    ) {
+      fraudCache.delete(phone);
+    }
+  }
+
+  /*
+    Emergency protection if cache becomes too large.
+  */
+
+  if (
+    fraudCache.size >
+    MAX_FRAUD_CACHE_SIZE
+  ) {
+    const entries =
+      [...fraudCache.entries()]
+        .sort(
+          (a, b) =>
+            a[1].expiresAt -
+            b[1].expiresAt
+        );
+
+    const removeCount =
+      fraudCache.size -
+      MAX_FRAUD_CACHE_SIZE;
+
+    for (
+      let i = 0;
+      i < removeCount;
+      i++
+    ) {
+      fraudCache.delete(
+        entries[i][0]
+      );
+    }
+  }
+};
+
+/* =========================================================
    STEADFAST FRAUD CHECK
-   Production-safe version
 ========================================================= */
 
 export const checkSteadfastFraud = async (
@@ -458,8 +505,10 @@ export const checkSteadfastFraud = async (
   const phone =
     normalizeBdPhone(rawPhone);
 
+  cleanupFraudCache();
+
   /* =====================================================
-     CHECK CACHE
+     CACHE CHECK
   ===================================================== */
 
   const cached =
@@ -470,19 +519,18 @@ export const checkSteadfastFraud = async (
     cached.expiresAt > Date.now()
   ) {
     console.log(
-      `STEADFAST FRAUD CACHE HIT: ${phone}`
+      "STEADFAST FRAUD CACHE HIT"
     );
 
     return cached.data;
   }
 
-  // Remove expired cache
   if (cached) {
     fraudCache.delete(phone);
   }
 
   /* =====================================================
-     PREVENT DUPLICATE SIMULTANEOUS REQUESTS
+     DUPLICATE REQUEST PROTECTION
   ===================================================== */
 
   const existingRequest =
@@ -490,7 +538,7 @@ export const checkSteadfastFraud = async (
 
   if (existingRequest) {
     console.log(
-      `STEADFAST FRAUD REQUEST ALREADY RUNNING: ${phone}`
+      "STEADFAST FRAUD REQUEST ALREADY RUNNING"
     );
 
     return existingRequest;
@@ -504,40 +552,13 @@ export const checkSteadfastFraud = async (
     (async () => {
       try {
         console.log(
-          "================================================"
-        );
-
-        console.log(
-          "STEADFAST FRAUD CHECK"
-        );
-
-        console.log({
-          phone,
-          baseUrl:
-            config.baseUrl,
-          hasApiKey:
-            Boolean(
-              config.apiKey
-            ),
-          hasSecretKey:
-            Boolean(
-              config.secretKey
-            ),
-        });
-
-        console.log(
-          "================================================"
+          "STEADFAST FRAUD CHECK STARTED"
         );
 
         const fraudUrl =
           `${config.baseUrl}/fraud_check/${encodeURIComponent(
             phone
           )}`;
-
-        console.log(
-          "STEADFAST FRAUD URL:",
-          fraudUrl
-        );
 
         const response =
           await axios.get(
@@ -546,48 +567,27 @@ export const checkSteadfastFraud = async (
               headers: {
                 "Api-Key":
                   config.apiKey,
-
                 "Secret-Key":
                   config.secretKey,
-
                 Accept:
-                  "application/json",
-
-                "Content-Type":
                   "application/json",
               },
 
               timeout: 30000,
 
-              // We want to manually handle
-              // 400 / 401 / 403 / 404 / 429.
+              /*
+                Manually handle API
+                status codes.
+              */
+
               validateStatus:
                 () => true,
             }
           );
 
         console.log(
-          "================================================"
-        );
-
-        console.log(
           "STEADFAST FRAUD HTTP STATUS:",
           response.status
-        );
-
-        console.log(
-          "STEADFAST FRAUD RESPONSE:"
-        );
-
-        console.dir(
-          response.data,
-          {
-            depth: null,
-          }
-        );
-
-        console.log(
-          "================================================"
         );
 
         /* =================================================
@@ -597,13 +597,40 @@ export const checkSteadfastFraud = async (
         if (
           response.status === 429
         ) {
-          throw new Error(
-            "SteadFast fraud-check rate limit reached. Please try again later."
-          );
+          const rateLimitError =
+            new Error(
+              "SteadFast fraud-check rate limit reached. Please try again later."
+            );
+
+          rateLimitError.statusCode =
+            429;
+
+          throw rateLimitError;
         }
 
         /* =================================================
-           HTTP ERROR
+           AUTH ERRORS
+        ================================================= */
+
+        if (
+          response.status === 401 ||
+          response.status === 403
+        ) {
+          const authError =
+            new Error(
+              response?.data?.message ||
+                response?.data?.error ||
+                "SteadFast authentication failed."
+            );
+
+          authError.statusCode =
+            response.status;
+
+          throw authError;
+        }
+
+        /* =================================================
+           OTHER HTTP ERRORS
         ================================================= */
 
         if (
@@ -611,16 +638,18 @@ export const checkSteadfastFraud = async (
           response.status >= 300
         ) {
           const apiMessage =
-            response?.data
-              ?.message ||
-            response?.data
-              ?.error ||
+            response?.data?.message ||
+            response?.data?.error ||
             response?.data?.msg ||
             `SteadFast returned HTTP ${response.status}`;
 
-          throw new Error(
-            apiMessage
-          );
+          const apiError =
+            new Error(apiMessage);
+
+          apiError.statusCode =
+            response.status;
+
+          throw apiError;
         }
 
         /* =================================================
@@ -632,7 +661,6 @@ export const checkSteadfastFraud = async (
 
         let data = root;
 
-        // If API wraps response in data
         if (
           root?.data &&
           typeof root.data ===
@@ -643,17 +671,6 @@ export const checkSteadfastFraud = async (
         ) {
           data = root.data;
         }
-
-        console.log(
-          "STEADFAST FRAUD DATA OBJECT:"
-        );
-
-        console.dir(
-          data,
-          {
-            depth: null,
-          }
-        );
 
         /* =================================================
            TOTAL PARCELS
@@ -738,7 +755,6 @@ export const checkSteadfastFraud = async (
           data?.fraudReportCount ??
           0;
 
-        // Array response
         if (
           Array.isArray(
             fraudReportValue
@@ -746,43 +762,13 @@ export const checkSteadfastFraud = async (
         ) {
           totalFraudReports =
             fraudReportValue;
-        }
-
-        // Number response
-        else if (
-          typeof fraudReportValue ===
-          "number"
-        ) {
+        } else {
           const fraudCount =
-            Math.max(
-              0,
-              Math.floor(
-                fraudReportValue
-              )
-            );
-
-          totalFraudReports =
-            Array(
-              fraudCount
-            ).fill({});
-        }
-
-        // Numeric string response
-        else if (
-          typeof fraudReportValue ===
-            "string" &&
-          fraudReportValue.trim() !==
-            ""
-        ) {
-          const fraudCount =
-            Number(
+            toSafeNumber(
               fraudReportValue
             );
 
           if (
-            Number.isFinite(
-              fraudCount
-            ) &&
             fraudCount > 0
           ) {
             totalFraudReports =
@@ -822,7 +808,7 @@ export const checkSteadfastFraud = async (
             : 0;
 
         /* =================================================
-           PARSED RESULT
+           FINAL RESULT
         ================================================= */
 
         const parsedResult = {
@@ -863,78 +849,36 @@ export const checkSteadfastFraud = async (
         );
 
         console.log(
-          "================================================"
-        );
-
-        console.log(
-          "STEADFAST FRAUD PARSED RESULT"
-        );
-
-        console.log({
-          phone,
-
-          totalParcels,
-
-          totalDelivered,
-
-          totalCancelled,
-
-          totalReturned,
-
-          fraudReports:
-            totalFraudReports.length,
-
-          cancellationRate,
-
-          hasHistory,
-        });
-
-        console.log(
-          "================================================"
+          "STEADFAST FRAUD RESULT",
+          {
+            totalParcels,
+            totalDelivered,
+            totalCancelled,
+            totalReturned,
+            fraudReports:
+              totalFraudReports.length,
+            cancellationRate,
+            hasHistory,
+          }
         );
 
         return parsedResult;
       } catch (error) {
         console.error(
-          "================================================"
+          "STEADFAST FRAUD CHECK ERROR:",
+          {
+            status:
+              error?.statusCode ||
+              error?.response?.status ||
+              null,
+
+            message:
+              error?.message,
+          }
         );
 
-        console.error(
-          "STEADFAST FRAUD CHECK ERROR"
-        );
-
-        console.error(
-          "HTTP Status:",
-          error?.response?.status
-        );
-
-        console.error(
-          "SteadFast Response:",
-          error?.response?.data
-        );
-
-        console.error(
-          "Error Message:",
-          error?.message
-        );
-
-        console.error(
-          "================================================"
-        );
-
-        throw new Error(
-          error?.response
-            ?.data?.message ||
-            error?.response
-              ?.data?.error ||
-            error?.message ||
-            "Failed to check SteadFast fraud."
-        );
+        throw error;
       } finally {
-        /* ===============================================
-           REMOVE RUNNING REQUEST
-        =============================================== */
-
         fraudRequests.delete(
           phone
         );
@@ -974,10 +918,6 @@ export const calculateRiskLevel = ({
 
   let fraudReportCount = 0;
 
-  /* =====================================================
-     FRAUD REPORT COUNT
-  ===================================================== */
-
   if (
     Array.isArray(
       totalFraudReports
@@ -993,10 +933,7 @@ export const calculateRiskLevel = ({
   }
 
   /* =====================================================
-     NO STEADFAST HISTORY
-
-     Order model supports:
-     Unknown / Low / Medium / High
+     NO HISTORY
   ===================================================== */
 
   if (parcels <= 0) {
@@ -1004,7 +941,7 @@ export const calculateRiskLevel = ({
   }
 
   /* =====================================================
-     FRAUD REPORT EXISTS
+     FRAUD REPORT
   ===================================================== */
 
   if (
@@ -1020,23 +957,17 @@ export const calculateRiskLevel = ({
   const cancellationRatio =
     cancelled / parcels;
 
-  /* 50% or more = High */
-
   if (
     cancellationRatio >= 0.5
   ) {
     return "High";
   }
 
-  /* 25% - 49.99% = Medium */
-
   if (
     cancellationRatio >= 0.25
   ) {
     return "Medium";
   }
-
-  /* Less than 25% = Low */
 
   return "Low";
 };
